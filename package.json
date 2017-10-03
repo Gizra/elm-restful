@@ -1,0 +1,27 @@
+{
+  "name": "elm-drupal",
+  "version": "1.0.0",
+  "description": "Utilities useful for working with a Drupal backend",
+  "main": "index.js",
+  "directories": {
+    "test": "tests"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "elm": "^0.18.0",
+    "elm-test": "^0.18.9"
+  },
+  "scripts": {
+    "test": "elm-test"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Gizra/elm-drupal.git"
+  },
+  "author": "Ryan Rempel <ryan@gizra.com>",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/Gizra/elm-drupal/issues"
+  },
+  "homepage": "https://github.com/Gizra/elm-drupal#readme"
+}
