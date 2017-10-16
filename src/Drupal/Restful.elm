@@ -1,17 +1,45 @@
-module Drupal.Restful exposing (EndPoint, Entity, EntityDictList, get, decodeSingleDrupalEntity, decodeId, decodeStorageTuple)
+module Drupal.Restful
+    exposing
+        ( EndPoint
+        , Entity
+        , EntityDictList
+        , EntityId
+        , decodeEntityId
+        , decodeId
+        , decodeSingleEntity
+        , decodeStorageTuple
+        , encodeEntityId
+        , fromEntityId
+        , get
+        , get404
+        , select
+        , toEntityId
+        )
 
 {-| These functions facilitate CRUD operations upon Drupal entities
 exposed through the Restful API.
 
-@docs EndPoint, Entity, EntityDictList, get, decodeSingleDrupalEntity, decodeId, decodeStorageTuple
+## Types
+
+@docs EndPoint, Entity, EntityDictList, EntityId
+
+## CRUD Operations
+
+@docs get, get404, select
+
+## JSON
+
+@docs decodeEntityId, decodeId, decodeSingleEntity, decodeStorageTuple, encodeEntityId, fromEntityId, toEntityId
 
 -}
 
 import EveryDictList exposing (EveryDictList)
 import Gizra.Json exposing (decodeInt)
-import Json.Decode exposing (Decoder, list, map, field, map2, index)
-import Http exposing (Error, expectJson)
+import Http exposing (Error(..), expectJson)
 import HttpBuilder exposing (..)
+import Json.Decode exposing (Decoder, list, map, field, map2, index)
+import Json.Encode exposing (Value)
+import Maybe.Extra
 import StorageKey exposing (StorageKey(..))
 
 
@@ -24,7 +52,6 @@ type alias AccessToken =
 
 
 {-| This is a start at a nicer idiom for dealing with Drupal JSON endpoints.
-
 The basic idea is to include in this type all those things about an endpoint
 which don't change. For instance, we know the path of the endpoint, what kind
 of JSON it emits, etc. -- that never varies.
@@ -47,6 +74,14 @@ type alias EndPoint error params key value =
     -- The tag which wraps the integer node ID. (This assumes an integer node
     -- ID ... we could make it more general someday if needed).
     , tag : Int -> key
+
+    -- Does the reverse of `tag` -- given a key, produces an `Int`
+    --
+    -- TODO: If we insisted on using an `EntityId ...` as the key, we could
+    -- get rid of tag and untag (since they would always be `toEntityId` and
+    -- `fromEntityId`). This is probably desirable, but making the types work
+    -- will take a bit of effort.
+    , untag : key -> Int
 
     -- A decoder for the values
     , decoder : Decoder value
@@ -83,7 +118,17 @@ type alias EntityDictList key value =
     EveryDictList (StorageKey key) value
 
 
-{-| Get entities from an endpoint.
+{-| Appends left-to-right, joining with a "/" if needed.
+-}
+(</>) : String -> String -> String
+(</>) left right =
+    if String.endsWith "/" left || String.startsWith "/" right then
+        left ++ right
+    else
+        left ++ "/" ++ right
+
+
+{-| Select entities from an endpoint.
 
 What we hand you is a `Result` with a list of entities, since that is the most
 "natural" thing to hand back. You can convert it to a `RemoteData` easily with
@@ -97,11 +142,64 @@ structures and idioms that Drupal uses in its JSON. One could imagine making thi
 more general if necessary at some point.
 
 -}
-get : BackendUrl -> AccessToken -> EndPoint error params key value -> params -> (Result error (List (Entity key value)) -> msg) -> Cmd msg
-get backendUrl accessToken endpoint params tagger =
-    HttpBuilder.get (backendUrl ++ "/api/" ++ endpoint.path)
-        |> withQueryParams (( "access_token", accessToken ) :: endpoint.params params)
-        |> withExpect (expectJson (decodeData (list (decodeStorageTuple (decodeId endpoint.tag) endpoint.decoder))))
+select : BackendUrl -> Maybe AccessToken -> EndPoint error params key value -> params -> (Result error (List (Entity key value)) -> msg) -> Cmd msg
+select backendUrl accessToken endpoint params tagger =
+    let
+        queryParams =
+            accessToken
+                |> Maybe.Extra.toList
+                |> List.map (\token -> ( "access_token", token ))
+                |> List.append (endpoint.params params)
+    in
+        HttpBuilder.get (backendUrl </> endpoint.path)
+            |> withQueryParams queryParams
+            |> withExpect (expectJson (decodeData (list (decodeStorageTuple (decodeId endpoint.tag) endpoint.decoder))))
+            |> send (Result.mapError endpoint.error >> tagger)
+
+
+{-| Gets a entity from the backend via its ID.
+
+If we get a 404 error, we'll give you an `Ok Nothing`, rather than an error,
+since the request essentially succeeded ...  there merely was no entity with
+that ID.
+-}
+get : BackendUrl -> Maybe AccessToken -> EndPoint error params key value -> key -> (Result error (Maybe (Entity key value)) -> msg) -> Cmd msg
+get backendUrl accessToken endpoint key tagger =
+    let
+        queryParams =
+            accessToken
+                |> Maybe.Extra.toList
+                |> List.map (\token -> ( "access_token", token ))
+    in
+        HttpBuilder.get (backendUrl </> endpoint.path </> toString (endpoint.untag key))
+            |> withQueryParams queryParams
+            |> withExpect (expectJson (decodeSingleEntity (decodeStorageTuple (decodeId endpoint.tag) endpoint.decoder)))
+            |> send
+                (\result ->
+                    let
+                        recover =
+                            case result of
+                                Err (BadStatus response) ->
+                                    if response.status.code == 404 then
+                                        Ok Nothing
+                                    else
+                                        Result.map Just result
+
+                                _ ->
+                                    Result.map Just result
+                    in
+                        recover
+                            |> Result.mapError endpoint.error
+                            |> tagger
+                )
+
+
+{-| Let `get`, but treats a 404 response as an error in the `Result`, rather than a `Nothing` response.
+-}
+get404 : BackendUrl -> Maybe AccessToken -> EndPoint error params key value -> key -> (Result error (Entity key value) -> msg) -> Cmd msg
+get404 backendUrl accessToken endpoint key tagger =
+    HttpBuilder.get (backendUrl </> endpoint.path </> toString (endpoint.untag key))
+        |> withExpect (expectJson (decodeSingleEntity (decodeStorageTuple (decodeId endpoint.tag) endpoint.decoder)))
         |> send (Result.mapError endpoint.error >> tagger)
 
 
@@ -150,6 +248,61 @@ To decode this, write a decoder for the "inner" part (the actual entity), and th
 supply that as a parameter to `decodeSingleDrupalEntity`.
 
 -}
-decodeSingleDrupalEntity : Decoder a -> Decoder a
-decodeSingleDrupalEntity =
+decodeSingleEntity : Decoder a -> Decoder a
+decodeSingleEntity =
     decodeData << index 0
+
+
+{-| This is a wrapper for an `Int` id. It takes a "phantom" type variable
+in order to gain type-safety about what kind of entity it is an ID for.
+So, to specify that you have an id for a clinic, you would say:
+
+    clinidId : EntityId ClinicId
+
+-}
+type EntityId a
+    = EntityId Int
+
+
+{-| This is how you create a EntityId, if you have an `Int`. You can create
+any kind of `EntityId` this way ... so you would normally only do this in
+situations that are fundamentally untyped, such as when you are decoding
+JSON data. Except in those kind of "boundary" situations, you should be
+working with the typed EntityIds.
+-}
+toEntityId : Int -> EntityId a
+toEntityId =
+    EntityId
+
+
+{-| This is how you get an `Int` back from a `EntityId`. You should only use
+this in boundary situations, where you need to send the id out in an untyped
+way. Normally, you should just pass around the `EntityId` itself, to retain
+type-safety.
+-}
+fromEntityId : EntityId a -> Int
+fromEntityId (EntityId a) =
+    a
+
+
+{-| Decodes a EntityId.
+
+This just turns JSON int (or string that is an int) to a EntityId. You need
+to supply the `field "id"` yourself, if necessary, since id's could be present
+in other fields as well.
+
+This decodes any kind of EntityId you like (since there is fundamentally no type
+information in the JSON iself, of course). So, you need to verify that the type
+is correct yourself.
+
+-}
+decodeEntityId : Decoder (EntityId a)
+decodeEntityId =
+    Json.Decode.map toEntityId decodeInt
+
+
+{-| Encodes any kind of `EntityId` as a JSON int.
+-}
+encodeEntityId : EntityId a -> Value
+encodeEntityId =
+    Json.Encode.int << fromEntityId
