@@ -1,9 +1,12 @@
 module Restful.Endpoint
     exposing
-        ( EndPoint
+        ( AccessToken
+        , BackendUrl
+        , EndPoint
         , Entity
         , EntityDictList
         , EntityId
+        , decodeEntity
         , decodeEntityId
         , decodeId
         , decodeSingleEntity
@@ -14,15 +17,17 @@ module Restful.Endpoint
         , get404
         , select
         , toEntityId
+        , (</>)
         )
 
-{-| These functions facilitate CRUD operations upon Drupal entities
-exposed through the Restful API.
+{-| These functions facilitate CRUD operations upon entities exposed through a
+Restful API. It is oriented towards a Drupal backend, but could be used (or
+modified to use) with other backends that produce similar JSON.
 
 
 ## Types
 
-@docs EndPoint, Entity, EntityDictList, EntityId
+@docs EndPoint, Entity, EntityDictList, EntityId, AccessToken, BackendUrl
 
 
 ## CRUD Operations
@@ -32,7 +37,12 @@ exposed through the Restful API.
 
 ## JSON
 
-@docs decodeEntityId, decodeId, decodeSingleEntity, decodeStorageTuple, encodeEntityId, fromEntityId, toEntityId
+@docs decodeEntityId, decodeId, decodeSingleEntity, decodeEntity, decodeStorageTuple, encodeEntityId, fromEntityId, toEntityId
+
+
+## Helpers
+
+@docs (</>)
 
 -}
 
@@ -40,21 +50,25 @@ import EveryDictList exposing (EveryDictList)
 import Gizra.Json exposing (decodeInt)
 import Http exposing (Error(..), expectJson)
 import HttpBuilder exposing (..)
-import Json.Decode exposing (Decoder, list, map, field, map2, index)
+import Json.Decode exposing (Decoder, field, index, list, map, map2)
 import Json.Encode exposing (Value)
 import Maybe.Extra
 import StorageKey exposing (StorageKey(..))
 
 
+{-| The base URL for a backend.
+-}
 type alias BackendUrl =
     String
 
 
+{-| An access token.
+-}
 type alias AccessToken =
     String
 
 
-{-| This is a start at a nicer idiom for dealing with Drupal JSON endpoints.
+{-| This is a start at a nicer idiom for dealing with Restful JSON endpoints.
 The basic idea is to include in this type all those things about an endpoint
 which don't change. For instance, we know the path of the endpoint, what kind
 of JSON it emits, etc. -- that never varies.
@@ -89,6 +103,11 @@ type alias EndPoint error params key value =
     -- A decoder for the values
     , decoder : Decoder value
 
+    -- An encoder for the value. The ID will be added automatically ... you
+    -- just need to supply the key-value pairs to encode the value itself.
+    --
+    -- , encoder : value -> List ( String, Value )
+    --
     -- You may want to use your own error type. If so, provided something
     -- that maps from the kind of `Http.Error` this endpoint produces to
     -- your local error type. If you just want to use `Http.Error` dirdctly
@@ -139,10 +158,6 @@ a `RemoteData.fromResult` if you like.
 
 The `error` type parameter allows the endpoint to have locally-typed errors. You
 can just use `Http.Error`, though, if you want to.
-
-Note that the code is basically Drupal-specific ... that is, it assumes various
-structures and idioms that Drupal uses in its JSON. One could imagine making this
-more general if necessary at some point.
 
 -}
 select : BackendUrl -> Maybe AccessToken -> EndPoint error params key value -> params -> (Result error (List (Entity key value)) -> msg) -> Cmd msg
@@ -202,9 +217,53 @@ get backendUrl accessToken endpoint key tagger =
 -}
 get404 : BackendUrl -> Maybe AccessToken -> EndPoint error params key value -> key -> (Result error (Entity key value) -> msg) -> Cmd msg
 get404 backendUrl accessToken endpoint key tagger =
-    HttpBuilder.get (backendUrl </> endpoint.path </> toString (endpoint.untag key))
-        |> withExpect (expectJson (decodeSingleEntity (decodeStorageTuple (decodeId endpoint.tag) endpoint.decoder)))
-        |> send (Result.mapError endpoint.error >> tagger)
+    let
+        queryParams =
+            accessToken
+                |> Maybe.Extra.toList
+                |> List.map (\token -> ( "access_token", token ))
+    in
+        HttpBuilder.get (backendUrl </> endpoint.path </> toString (endpoint.untag key))
+            |> withQueryParams queryParams
+            |> withExpect (expectJson (decodeSingleEntity (decodeStorageTuple (decodeId endpoint.tag) endpoint.decoder)))
+            |> send (Result.mapError endpoint.error >> tagger)
+
+
+
+{- If we have an `Existing` storage key, then update the backend via `patch`.
+
+   If we have a `New` storage key, insert it in the backend via `post`.
+
+   TODO: At the moment, we "patch" everything we would normally "post".l
+
+-}
+{-
+   upsert : BackendUrl -> Maybe AccessToken -> EndPoint error params key value -> Entity key value -> (Result error (Entity key value) -> msg) -> Cmd msg
+   upsert backendUrl accessToken endpoint (key, value) tagger =
+       let
+           queryParams =
+               accessToken
+                   |> Maybe.Extra.toList
+                   |> List.map (\token -> ( "access_token", token ))
+
+           encodedValue =
+               endpoint.encoder value
+       in
+           case key of
+               Existing id ->
+                   HttpBuilder.patch (backendUrl </> endpoint.path </> toString (endpoint.untag id)
+                       |> withQueryParams queryParams
+                       |> withJsonBody
+                       |> withExpect (expectJson (decodeSingleEntity (decodeStorageTuple (decodeId endpoint.tag) endpoint.decoder)))
+                       |> send (Result.mapError endpoint.error >> tagger)
+
+               New ->
+                   HttpBuilder.post (backendUrl </> endpoint.path)
+                       |> withQueryParams queryParams
+                       |> withJsonBody (config.encodeStorage ( key, value ))
+                       |> withExpect (Http.expectJson (decodeSingleEntity config.decodeStorage))
+                       |> send config.handler
+-}
 
 
 {-| Convenience for the pattern where you have a field called "id",
@@ -227,13 +286,21 @@ decodeStorageTuple keyDecoder valueDecoder =
         valueDecoder
 
 
+{-| Like `decodeStorageTuple`, but assumes that your key is some kind of `EntityId`.
+-}
+decodeEntity : Decoder value -> Decoder (Entity (EntityId a) value)
+decodeEntity =
+    decodeStorageTuple (field "id" decodeEntityId)
+
+
 decodeData : Decoder a -> Decoder a
 decodeData =
     field "data"
 
 
-{-| Given a decoder for a Drupal entity, applies it to the kind of response Drupal
-sends when you do a PUT, POST, or PATCH.
+{-| Given a decoder for an entity, applies it to a JSON response that consists
+of a `data` field with a array of length 1, containing the entity. (This is
+what Drupal sends when you do a PUT, POST, or PATCH.)
 
 For instance, if you POST an entity, Drupal will send back the JSON for that entity,
 as the single element of an array, then wrapped in a `data` field, e.g.:
@@ -249,7 +316,7 @@ as the single element of an array, then wrapped in a `data` field, e.g.:
     }
 
 To decode this, write a decoder for the "inner" part (the actual entity), and then
-supply that as a parameter to `decodeSingleDrupalEntity`.
+supply that as a parameter to `decodeSingleEntity`.
 
 -}
 decodeSingleEntity : Decoder a -> Decoder a
