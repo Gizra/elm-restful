@@ -1,13 +1,13 @@
 {
     "version": "1.0.0",
-    "summary": "Utilities useful for working with a Drupal backend",
-    "repository": "https://github.com/Gizra/elm-drupal.git",
+    "summary": "Connect with a RESTful backend",
+    "repository": "https://github.com/Gizra/elm-restful.git",
     "license": "MIT",
     "source-directories": [
         "src"
     ],
     "exposed-modules": [
-        "Drupal.Restful"
+        "Restful.Endpoint"
     ],
     "dependencies": {
         "Gizra/elm-dictlist": "2.1.0 <= v < 3.0.0",

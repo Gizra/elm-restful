@@ -1,4 +1,4 @@
-module Drupal.Restful
+module Restful.Endpoint
     exposing
         ( EndPoint
         , Entity
@@ -19,13 +19,16 @@ module Drupal.Restful
 {-| These functions facilitate CRUD operations upon Drupal entities
 exposed through the Restful API.
 
+
 ## Types
 
 @docs EndPoint, Entity, EntityDictList, EntityId
 
+
 ## CRUD Operations
 
 @docs get, get404, select
+
 
 ## JSON
 
@@ -160,8 +163,9 @@ select backendUrl accessToken endpoint params tagger =
 {-| Gets a entity from the backend via its ID.
 
 If we get a 404 error, we'll give you an `Ok Nothing`, rather than an error,
-since the request essentially succeeded ...  there merely was no entity with
+since the request essentially succeeded ... there merely was no entity with
 that ID.
+
 -}
 get : BackendUrl -> Maybe AccessToken -> EndPoint error params key value -> key -> (Result error (Maybe (Entity key value)) -> msg) -> Cmd msg
 get backendUrl accessToken endpoint key tagger =
