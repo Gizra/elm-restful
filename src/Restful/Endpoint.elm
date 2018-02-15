@@ -3,14 +3,10 @@ module Restful.Endpoint
         ( AccessToken
         , BackendUrl
         , EndPoint
-        , Entity
-        , EntityDictList
         , EntityId
-        , decodeEntity
         , decodeEntityId
         , decodeId
         , decodeSingleEntity
-        , decodeStorageTuple
         , encodeEntityId
         , fromEntityId
         , get
@@ -32,7 +28,7 @@ modified to use) with other backends that produce similar JSON.
 
 ## Types
 
-@docs EndPoint, Entity, EntityDictList, EntityId, AccessToken, BackendUrl
+@docs EndPoint, EntityId, AccessToken, BackendUrl
 
 
 ## CRUD Operations
@@ -42,18 +38,21 @@ modified to use) with other backends that produce similar JSON.
 
 ## JSON
 
-@docs decodeEntityId, decodeId, decodeSingleEntity, decodeEntity, decodeStorageTuple, encodeEntityId, fromEntityId, toEntityId
+@docs decodeEntityId, decodeId, decodeSingleEntity, encodeEntityId, fromEntityId, toEntityId
+
+
+## Helpers
+
+@docs (</>)
 
 -}
 
-import EveryDictList exposing (EveryDictList)
 import Gizra.Json exposing (decodeInt)
 import Http exposing (Error(..), expectJson)
 import HttpBuilder exposing (..)
 import Json.Decode exposing (Decoder, field, index, list, map, map2)
 import Json.Encode exposing (Value)
 import Maybe.Extra
-import StorageKey exposing (StorageKey(..))
 
 
 {-| The base URL for a backend.
@@ -121,22 +120,6 @@ type alias EndPoint error params key value =
     -- If you never take params, then you can supply `always []`
     , params : params -> List ( String, String )
     }
-
-
-{-| Roughtly analogous to Yesod's `Entity` ... the combination of an ID and a value.
-
-For now, it's just a type alias for a Tuple, where the first element is a StorageKey.
-
--}
-type alias Entity key value =
-    ( StorageKey key, value )
-
-
-{-| It woudld be natural to put entities in a DictList, so here's a type to make
-that less verbose.
--}
-type alias EntityDictList key value =
-    EveryDictList (StorageKey key) value
 
 
 {-| Appends left-to-right, joining with a "/" if needed.
@@ -368,24 +351,6 @@ just use `decodeId PersonId`.
 decodeId : (Int -> a) -> Decoder a
 decodeId wrapper =
     map wrapper (field "id" decodeInt)
-
-
-{-| Convenience for the case where you have a decoder for the ID,
-a decoder for the value, and you want to decode a tuple of StorageKey and
-value.
--}
-decodeStorageTuple : Decoder key -> Decoder value -> Decoder ( StorageKey key, value )
-decodeStorageTuple keyDecoder valueDecoder =
-    map2 (,)
-        (map Existing keyDecoder)
-        valueDecoder
-
-
-{-| Like `decodeStorageTuple`, but assumes that your key is some kind of `EntityId`.
--}
-decodeEntity : Decoder value -> Decoder (Entity (EntityId a) value)
-decodeEntity =
-    decodeStorageTuple (field "id" decodeEntityId)
 
 
 decodeData : Decoder a -> Decoder a
