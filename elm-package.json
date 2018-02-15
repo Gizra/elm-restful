@@ -7,7 +7,8 @@
         "src"
     ],
     "exposed-modules": [
-        "Restful.Endpoint"
+        "Restful.Endpoint",
+        "Restful.Login"
     ],
     "dependencies": {
         "Gizra/elm-essentials": "1.2.0 <= v < 2.0.0",
