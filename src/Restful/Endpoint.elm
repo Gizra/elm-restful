@@ -155,8 +155,11 @@ tokenUrlParam =
 {-| Appends the second parameter to the first, joining them with a "/", but avoiding "//".
 
     "http://www.apple.com"  </> "path"  --> "http://www.apple.com/path"
+
     "http://www.apple.com"  </> "/path" --> "http://www.apple.com/path"
+
     "http://www.apple.com/" </> "path"  --> "http://www.apple.com/path"
+
     "http://www.apple.com/" </> "/path" --> "http://www.apple.com/path"
 
 -}
