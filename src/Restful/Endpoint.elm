@@ -202,7 +202,8 @@ select backendUrl accessToken endpoint params tagger =
 
 If we get a 404 error, we'll give you an `Ok Nothing`, rather than an error,
 since the request essentially succeeded ... there merely was no entity with
-that ID.
+that ID. If you'd prefer an error in that situation, you can use `get404`
+instead.
 
 -}
 get : BackendUrl -> Maybe AccessToken -> EndPoint error params key value posted -> key -> (Result error (Maybe ( key, value )) -> msg) -> Cmd msg
