@@ -12,8 +12,10 @@ module Restful.Endpoint
         , decodeId
         , decodeSingleEntity
         , delete
+        , drupalEndpoint
         , encodeEntityId
         , encodeEntityUuid
+        , endpoint
         , fromEntityId
         , fromEntityUuid
         , get
@@ -35,9 +37,9 @@ Restful API. It is oriented towards a Drupal backend, but could be used (or
 modified to use) with other backends that produce similar JSON.
 
 
-## Types
+## Constructing Endpoints
 
-@docs EndPoint, EntityId, EntityUuid, BackendUrl
+@docs EndPoint, drupalEndpoint, endpoint
 
 
 ## Access Tokens
@@ -47,12 +49,23 @@ modified to use) with other backends that produce similar JSON.
 
 ## CRUD Operations
 
+@docs BackendUrl
 @docs get, get404, select, patch, patch_, post, put, put_, delete
+
+
+## EntityId
+
+@docs EntityId, decodeEntityId, encodeEntityId, fromEntityId, toEntityId
+
+
+## EntityUuid
+
+@docs EntityUuid, decodeEntityUuid, encodeEntityUuid, fromEntityUuid, toEntityUuid
 
 
 ## JSON
 
-@docs decodeEntityId, decodeEntityUuid, decodeId, decodeSingleEntity, encodeEntityId, encodeEntityUuid, fromEntityId, fromEntityUuid, toEntityId, toEntityUuid
+@docs decodeId, decodeSingleEntity
 
 
 ## Helpers
@@ -130,6 +143,74 @@ type alias EndPoint error params key value posted =
     , mapError : Http.Error -> error
     , path : String
     , tokenStrategy : TokenStrategy
+    }
+
+
+{-| Construct a Drupal-oriented endpoint, with as many defaults filled in as possible.
+
+  - The first parameter is the `path` to the endpoint.
+  - The second parameter is a decoder for your `value` type.
+  - The third parameter is an encoder for your `value` type.
+
+Yes, just three parameters! We'll supplement that with various Drupal-oriented defaults:
+
+  - The `key` is some kind of `EntityId`, and it can be found in an `id` field in the JSON.
+    But you can change that with ...
+
+  - You create values with the full `value` type (not a partial `posted` type).
+    But you can change that with ...
+
+  - Multiple values are returned as a JSON array inside a `data` field.
+    But you can change that with ...
+
+  - Single values are returned as a single-elmeent JSON array, inside a `data` field.
+    But you can change that with ...
+
+  - Your endpoint doesn't use any URL params. But you can change that with ...
+
+  - You're not using a custom error type. But you can change that with ...
+
+  - An access token, if provided, will be sent as a URL param named "access_token".
+    But you can change that with ...
+
+-}
+drupalEndpoint : String -> Decoder value -> (value -> Value) -> EndPoint Http.Error () (EntityId a) value value
+drupalEndpoint path decodeValue encodeValue =
+    { decodeKey = decodeId toEntityId
+    , decodeMultiple = decodeDrupalList
+    , decodeSingle = decodeSingleEntity
+    , decodeValue = decodeValue
+    , encodeParams = always []
+    , encodePostedValue = encodeValue
+    , encodeValue = encodeValue
+    , keyToUrlPart = fromEntityId >> toString
+    , mapError = identity
+    , path = path
+    , tokenStrategy = TokenUrlParam "access_token"
+    }
+
+
+{-| Produces an `EndPoint` with very basic defaults ... it will need customization to actuall work
+with the JSON your backend returns.
+
+  - The first parameter is the `path` to the endpoint.
+  - The second parameter is a decoder for your `value` type.
+  - The third parameter is an encoder for your `value` type.
+
+-}
+endpoint : String -> Decoder value -> (value -> Value) -> EndPoint Http.Error () Int value value
+endpoint path decodeValue encodeValue =
+    { decodeKey = decodeId identity
+    , decodeMultiple = list
+    , decodeSingle = identity
+    , decodeValue = decodeValue
+    , encodeParams = always []
+    , encodePostedValue = encodeValue
+    , encodeValue = encodeValue
+    , keyToUrlPart = toString
+    , mapError = identity
+    , path = path
+    , tokenStrategy = TokenUrlParam "access_token"
     }
 
 
@@ -397,6 +478,11 @@ supply that as a parameter to `decodeSingleEntity`.
 decodeSingleEntity : Decoder a -> Decoder a
 decodeSingleEntity =
     decodeData << index 0
+
+
+decodeDrupalList : Decoder a -> Decoder (List a)
+decodeDrupalList =
+    decodeData << list
 
 
 {-| This is a wrapper for an `Int` id. It takes a "phantom" type variable
