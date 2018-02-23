@@ -64,7 +64,7 @@ modified to use) with other backends that produce similar JSON.
 import Gizra.Json exposing (decodeInt)
 import Http exposing (Error(..), expectJson)
 import HttpBuilder exposing (..)
-import Json.Decode exposing (Decoder, field, index, list, map, map2)
+import Json.Decode exposing (Decoder, field, index, list, map, map2, succeed)
 import Json.Encode exposing (Value)
 import Maybe.Extra
 
@@ -106,6 +106,8 @@ The fields you need to fill in for an endpoint are as follows:
 | Field | Usage |
 | ----- | ----- |
 | `decodeKey` | Given the JSON the backend returns for each item, how can we decode your `key` type? <p>If you're using a kind of `EntityId`, for the `key`, then you can just supply `decodeEntityId`. |
+| `decodeMultiple` | For requests like `select`, which return multiple values, what do we need to decode to get a list we can apply `decodeKey` or `decodeVvalue` to? |
+| `decodeSingle` | For requests like `get`, which return a single value, what do we need to decode before we apply `decodeKey` or `decodeValue`? That is, how must we traverse the JSON to get to the value which `decodeKey` or `decodeValue` can decode? |
 | `decodeValue` | Given the JSON the backend returns for each item, how can we decode your `value` type? |
 | `encodeParams` | Takes your `params` type and converts it into something we can feed to `HttpBuilder.withQueryParams`. So, you get type-safety for the params! If you never take params, you can supply `always []`. |
 | `encodePostedValue` | An encoder for your `postedValue`, used when creating new values using POST requests. May be the same as `encodeValue` if POST isn't special in your case. |
@@ -118,6 +120,8 @@ The fields you need to fill in for an endpoint are as follows:
 -}
 type alias EndPoint error params key value posted =
     { decodeKey : Decoder key
+    , decodeMultiple : Decoder ( key, value ) -> Decoder (List ( key, value ))
+    , decodeSingle : Decoder ( key, value ) -> Decoder ( key, value )
     , decodeValue : Decoder value
     , encodeParams : params -> List ( String, String )
     , encodePostedValue : posted -> Value
@@ -191,6 +195,36 @@ withAccessToken strategy maybeToken builder =
             builder
 
 
+expectMultiple : EndPoint error params key value posted -> RequestBuilder a -> RequestBuilder (List ( key, value ))
+expectMultiple endpoint =
+    map2 (,) endpoint.decodeKey endpoint.decodeValue
+        |> endpoint.decodeMultiple
+        |> expectJson
+        |> withExpect
+
+
+expectSingle : EndPoint error params key value posted -> RequestBuilder a -> RequestBuilder ( key, value )
+expectSingle endpoint =
+    map2 (,) endpoint.decodeKey endpoint.decodeValue
+        |> endpoint.decodeSingle
+        |> expectJson
+        |> withExpect
+
+
+{-| We could avoid this if Elm had Rank-N types, because in that case
+`EndPoint.decodeSingle` could demand a polymorphic function. Without that, we
+need to fulfill the more specific type signature in `Endpoint.decodeSingle` ...
+fortunately, in the cases we need that, we actually know the key!
+-}
+expectSingleWithKey : EndPoint error params key value posted -> key -> RequestBuilder a -> RequestBuilder value
+expectSingleWithKey endpoint key =
+    map2 (,) (succeed key) endpoint.decodeValue
+        |> endpoint.decodeSingle
+        |> map Tuple.second
+        |> expectJson
+        |> withExpect
+
+
 {-| Select entities from an endpoint.
 
 What we hand you is a `Result` with a list of entities, since that is the most
@@ -203,7 +237,7 @@ select backendUrl accessToken endpoint params tagger =
     HttpBuilder.get (backendUrl </> endpoint.path)
         |> withQueryParams (endpoint.encodeParams params)
         |> withAccessToken endpoint.tokenStrategy accessToken
-        |> withExpect (expectJson (decodeData (list (map2 (,) endpoint.decodeKey endpoint.decodeValue))))
+        |> expectMultiple endpoint
         |> send (Result.mapError endpoint.mapError >> tagger)
 
 
@@ -219,7 +253,7 @@ get : BackendUrl -> Maybe AccessToken -> EndPoint error params key value posted 
 get backendUrl accessToken endpoint key tagger =
     HttpBuilder.get (urlForKey backendUrl endpoint key)
         |> withAccessToken endpoint.tokenStrategy accessToken
-        |> withExpect (expectJson (decodeSingleEntity (map2 (,) endpoint.decodeKey endpoint.decodeValue)))
+        |> expectSingle endpoint
         |> send
             (\result ->
                 let
@@ -246,7 +280,7 @@ get404 : BackendUrl -> Maybe AccessToken -> EndPoint error params key value post
 get404 backendUrl accessToken endpoint key tagger =
     HttpBuilder.get (urlForKey backendUrl endpoint key)
         |> withAccessToken endpoint.tokenStrategy accessToken
-        |> withExpect (expectJson (decodeSingleEntity (map2 (,) endpoint.decodeKey endpoint.decodeValue)))
+        |> expectSingle endpoint
         |> send (Result.mapError endpoint.mapError >> tagger)
 
 
@@ -256,7 +290,7 @@ post : BackendUrl -> Maybe AccessToken -> EndPoint error params key value posted
 post backendUrl accessToken endpoint value tagger =
     HttpBuilder.post (backendUrl </> endpoint.path)
         |> withAccessToken endpoint.tokenStrategy accessToken
-        |> withExpect (expectJson (decodeSingleEntity (map2 (,) endpoint.decodeKey endpoint.decodeValue)))
+        |> expectSingle endpoint
         |> withJsonBody (endpoint.encodeValue value)
         |> send (Result.mapError endpoint.mapError >> tagger)
 
@@ -271,7 +305,7 @@ put : BackendUrl -> Maybe AccessToken -> EndPoint error params key value posted 
 put backendUrl accessToken endpoint key value tagger =
     HttpBuilder.put (urlForKey backendUrl endpoint key)
         |> withAccessToken endpoint.tokenStrategy accessToken
-        |> withExpect (expectJson (decodeSingleEntity endpoint.decodeValue))
+        |> expectSingleWithKey endpoint key
         |> withJsonBody (endpoint.encodeValue value)
         |> send (Result.mapError endpoint.mapError >> tagger)
 
@@ -301,7 +335,7 @@ patch : BackendUrl -> Maybe AccessToken -> EndPoint error params key value poste
 patch backendUrl accessToken endpoint key value tagger =
     HttpBuilder.patch (urlForKey backendUrl endpoint key)
         |> withAccessToken endpoint.tokenStrategy accessToken
-        |> withExpect (expectJson (decodeSingleEntity endpoint.decodeValue))
+        |> expectSingleWithKey endpoint key
         |> withJsonBody value
         |> send (Result.mapError endpoint.mapError >> tagger)
 
