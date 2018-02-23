@@ -176,6 +176,21 @@ tokenUrlParam =
             left ++ right
 
 
+withAccessToken : TokenStrategy -> Maybe AccessToken -> RequestBuilder a -> RequestBuilder a
+withAccessToken strategy maybeToken builder =
+    case maybeToken of
+        Just token ->
+            case strategy of
+                TokenHeader header ->
+                    withHeader header token builder
+
+                TokenUrlParam param ->
+                    withQueryParams [ ( param, token ) ] builder
+
+        Nothing ->
+            builder
+
+
 {-| Select entities from an endpoint.
 
 What we hand you is a `Result` with a list of entities, since that is the most
@@ -185,17 +200,11 @@ a `RemoteData.fromResult` if you like.
 -}
 select : BackendUrl -> Maybe AccessToken -> EndPoint error params key value posted -> params -> (Result error (List ( key, value )) -> msg) -> Cmd msg
 select backendUrl accessToken endpoint params tagger =
-    let
-        queryParams =
-            accessToken
-                |> Maybe.Extra.toList
-                |> List.map (\token -> ( "access_token", token ))
-                |> List.append (endpoint.encodeParams params)
-    in
-        HttpBuilder.get (backendUrl </> endpoint.path)
-            |> withQueryParams queryParams
-            |> withExpect (expectJson (decodeData (list (map2 (,) endpoint.decodeKey endpoint.decodeValue))))
-            |> send (Result.mapError endpoint.mapError >> tagger)
+    HttpBuilder.get (backendUrl </> endpoint.path)
+        |> withQueryParams (endpoint.encodeParams params)
+        |> withAccessToken endpoint.tokenStrategy accessToken
+        |> withExpect (expectJson (decodeData (list (map2 (,) endpoint.decodeKey endpoint.decodeValue))))
+        |> send (Result.mapError endpoint.mapError >> tagger)
 
 
 {-| Gets a entity from the backend via its ID.
@@ -208,66 +217,48 @@ instead.
 -}
 get : BackendUrl -> Maybe AccessToken -> EndPoint error params key value posted -> key -> (Result error (Maybe ( key, value )) -> msg) -> Cmd msg
 get backendUrl accessToken endpoint key tagger =
-    let
-        queryParams =
-            accessToken
-                |> Maybe.Extra.toList
-                |> List.map (\token -> ( "access_token", token ))
-    in
-        HttpBuilder.get (urlForKey backendUrl endpoint key)
-            |> withQueryParams queryParams
-            |> withExpect (expectJson (decodeSingleEntity (map2 (,) endpoint.decodeKey endpoint.decodeValue)))
-            |> send
-                (\result ->
-                    let
-                        recover =
-                            case result of
-                                Err (BadStatus response) ->
-                                    if response.status.code == 404 then
-                                        Ok Nothing
-                                    else
-                                        Result.map Just result
-
-                                _ ->
+    HttpBuilder.get (urlForKey backendUrl endpoint key)
+        |> withAccessToken endpoint.tokenStrategy accessToken
+        |> withExpect (expectJson (decodeSingleEntity (map2 (,) endpoint.decodeKey endpoint.decodeValue)))
+        |> send
+            (\result ->
+                let
+                    recover =
+                        case result of
+                            Err (BadStatus response) ->
+                                if response.status.code == 404 then
+                                    Ok Nothing
+                                else
                                     Result.map Just result
-                    in
-                        recover
-                            |> Result.mapError endpoint.mapError
-                            |> tagger
-                )
+
+                            _ ->
+                                Result.map Just result
+                in
+                    recover
+                        |> Result.mapError endpoint.mapError
+                        |> tagger
+            )
 
 
 {-| Let `get`, but treats a 404 response as an error in the `Result`, rather than a `Nothing` response.
 -}
 get404 : BackendUrl -> Maybe AccessToken -> EndPoint error params key value posted -> key -> (Result error ( key, value ) -> msg) -> Cmd msg
 get404 backendUrl accessToken endpoint key tagger =
-    let
-        queryParams =
-            accessToken
-                |> Maybe.Extra.toList
-                |> List.map (\token -> ( "access_token", token ))
-    in
-        HttpBuilder.get (urlForKey backendUrl endpoint key)
-            |> withQueryParams queryParams
-            |> withExpect (expectJson (decodeSingleEntity (map2 (,) endpoint.decodeKey endpoint.decodeValue)))
-            |> send (Result.mapError endpoint.mapError >> tagger)
+    HttpBuilder.get (urlForKey backendUrl endpoint key)
+        |> withAccessToken endpoint.tokenStrategy accessToken
+        |> withExpect (expectJson (decodeSingleEntity (map2 (,) endpoint.decodeKey endpoint.decodeValue)))
+        |> send (Result.mapError endpoint.mapError >> tagger)
 
 
 {-| Sends a `POST` request to create the specified value.
 -}
 post : BackendUrl -> Maybe AccessToken -> EndPoint error params key value posted -> value -> (Result error ( key, value ) -> msg) -> Cmd msg
 post backendUrl accessToken endpoint value tagger =
-    let
-        queryParams =
-            accessToken
-                |> Maybe.Extra.toList
-                |> List.map (\token -> ( "access_token", token ))
-    in
-        HttpBuilder.post (backendUrl </> endpoint.path)
-            |> withQueryParams queryParams
-            |> withExpect (expectJson (decodeSingleEntity (map2 (,) endpoint.decodeKey endpoint.decodeValue)))
-            |> withJsonBody (endpoint.encodeValue value)
-            |> send (Result.mapError endpoint.mapError >> tagger)
+    HttpBuilder.post (backendUrl </> endpoint.path)
+        |> withAccessToken endpoint.tokenStrategy accessToken
+        |> withExpect (expectJson (decodeSingleEntity (map2 (,) endpoint.decodeKey endpoint.decodeValue)))
+        |> withJsonBody (endpoint.encodeValue value)
+        |> send (Result.mapError endpoint.mapError >> tagger)
 
 
 {-| Sends a `PUT` request to create the specified value.
@@ -278,33 +269,21 @@ can use `put_` instead.
 -}
 put : BackendUrl -> Maybe AccessToken -> EndPoint error params key value posted -> key -> value -> (Result error value -> msg) -> Cmd msg
 put backendUrl accessToken endpoint key value tagger =
-    let
-        queryParams =
-            accessToken
-                |> Maybe.Extra.toList
-                |> List.map (\token -> ( "access_token", token ))
-    in
-        HttpBuilder.put (urlForKey backendUrl endpoint key)
-            |> withQueryParams queryParams
-            |> withExpect (expectJson (decodeSingleEntity endpoint.decodeValue))
-            |> withJsonBody (endpoint.encodeValue value)
-            |> send (Result.mapError endpoint.mapError >> tagger)
+    HttpBuilder.put (urlForKey backendUrl endpoint key)
+        |> withAccessToken endpoint.tokenStrategy accessToken
+        |> withExpect (expectJson (decodeSingleEntity endpoint.decodeValue))
+        |> withJsonBody (endpoint.encodeValue value)
+        |> send (Result.mapError endpoint.mapError >> tagger)
 
 
 {-| Like `put`, but ignores any value sent by the backend back ... just interprets errors.
 -}
 put_ : BackendUrl -> Maybe AccessToken -> EndPoint error params key value posted -> key -> value -> (Result error () -> msg) -> Cmd msg
 put_ backendUrl accessToken endpoint key value tagger =
-    let
-        queryParams =
-            accessToken
-                |> Maybe.Extra.toList
-                |> List.map (\token -> ( "access_token", token ))
-    in
-        HttpBuilder.put (urlForKey backendUrl endpoint key)
-            |> withQueryParams queryParams
-            |> withJsonBody (endpoint.encodeValue value)
-            |> send (Result.mapError endpoint.mapError >> tagger)
+    HttpBuilder.put (urlForKey backendUrl endpoint key)
+        |> withAccessToken endpoint.tokenStrategy accessToken
+        |> withJsonBody (endpoint.encodeValue value)
+        |> send (Result.mapError endpoint.mapError >> tagger)
 
 
 {-| Sends a `PATCH` request for the specified key and value.
@@ -320,41 +299,29 @@ you can use `patch_` instead.
 -}
 patch : BackendUrl -> Maybe AccessToken -> EndPoint error params key value posted -> key -> Value -> (Result error value -> msg) -> Cmd msg
 patch backendUrl accessToken endpoint key value tagger =
-    let
-        queryParams =
-            accessToken
-                |> Maybe.Extra.toList
-                |> List.map (\token -> ( "access_token", token ))
-    in
-        HttpBuilder.patch (urlForKey backendUrl endpoint key)
-            |> withQueryParams queryParams
-            |> withExpect (expectJson (decodeSingleEntity endpoint.decodeValue))
-            |> withJsonBody value
-            |> send (Result.mapError endpoint.mapError >> tagger)
+    HttpBuilder.patch (urlForKey backendUrl endpoint key)
+        |> withAccessToken endpoint.tokenStrategy accessToken
+        |> withExpect (expectJson (decodeSingleEntity endpoint.decodeValue))
+        |> withJsonBody value
+        |> send (Result.mapError endpoint.mapError >> tagger)
 
 
 {-| Like `patch`, but doesn't try to decode the response ... just reports errors.
 -}
 patch_ : BackendUrl -> Maybe AccessToken -> EndPoint error params key value posted -> key -> Value -> (Result error () -> msg) -> Cmd msg
 patch_ backendUrl accessToken endpoint key value tagger =
-    let
-        queryParams =
-            accessToken
-                |> Maybe.Extra.toList
-                |> List.map (\token -> ( "access_token", token ))
-    in
-        HttpBuilder.patch (urlForKey backendUrl endpoint key)
-            |> withQueryParams queryParams
-            |> withJsonBody value
-            |> send (Result.mapError endpoint.mapError >> tagger)
+    HttpBuilder.patch (urlForKey backendUrl endpoint key)
+        |> withAccessToken endpoint.tokenStrategy accessToken
+        |> withJsonBody value
+        |> send (Result.mapError endpoint.mapError >> tagger)
 
 
 {-| Delete entity.
 -}
-delete : BackendUrl -> AccessToken -> EndPoint error params key value posted -> key -> (Result error () -> msg) -> Cmd msg
+delete : BackendUrl -> Maybe AccessToken -> EndPoint error params key value posted -> key -> (Result error () -> msg) -> Cmd msg
 delete backendUrl accessToken endpoint key tagger =
     HttpBuilder.delete (urlForKey backendUrl endpoint key)
-        |> withQueryParams [ ( "access_token", accessToken ) ]
+        |> withAccessToken endpoint.tokenStrategy accessToken
         |> send (Result.mapError endpoint.mapError >> tagger)
 
 
