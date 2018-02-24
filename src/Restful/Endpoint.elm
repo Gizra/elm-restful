@@ -79,7 +79,6 @@ import Http exposing (Error(..), expectJson)
 import HttpBuilder exposing (..)
 import Json.Decode exposing (Decoder, field, index, list, map, map2, succeed)
 import Json.Encode exposing (Value)
-import Maybe.Extra
 
 
 {-| The base URL for a backend (i.e. the part that doesn't vary from
