@@ -6,11 +6,10 @@ module Restful.Endpoint
         , EndPoint
         , EntityId
         , EntityUuid
+        , KeyValue
         , TokenStrategy
         , decodeEntityId
         , decodeEntityUuid
-        , decodeId
-        , decodeSingleEntity
         , delete
         , drupalEndpoint
         , encodeEntityId
@@ -30,6 +29,12 @@ module Restful.Endpoint
         , toEntityUuid
         , tokenHeader
         , tokenUrlParam
+        , withError
+        , withKeyValue
+        , withParams
+        , withPath
+        , withPostedValue
+        , withTokenStrategy
         )
 
 {-| These functions facilitate CRUD operations upon entities exposed through a
@@ -40,6 +45,7 @@ modified to use) with other backends that produce similar JSON.
 ## Constructing Endpoints
 
 @docs EndPoint, drupalEndpoint, endpoint
+@docs KeyValue, withKeyValue, withParams, withPostedValue, withError, withPath, withTokenStrategy
 
 
 ## Access Tokens
@@ -61,11 +67,6 @@ modified to use) with other backends that produce similar JSON.
 ## EntityUuid
 
 @docs EntityUuid, decodeEntityUuid, encodeEntityUuid, fromEntityUuid, toEntityUuid
-
-
-## JSON
-
-@docs decodeId, decodeSingleEntity
 
 
 ## Helpers
@@ -130,19 +131,82 @@ The fields you need to fill in for an endpoint are as follows:
 | `tokenStrategy` | Given an `AccessToken`, how should we pass it to the backend? |
 
 -}
-type alias EndPoint error params key value posted =
+type EndPoint error params key value posted
+    = EndPoint
+        { encodeParams : params -> List ( String, String )
+        , encodePostedValue : posted -> Value
+        , kv : KeyValue key value
+        , mapError : Error -> error
+        , path : String
+        , tokenStrategy : TokenStrategy
+        }
+
+
+{-| Various things which relate to the key and value. These all need to be changed
+together ... they could be split up a bit if Elm had Rank-N types ... in that case,
+we'd use:
+
+    { decodeMultiple : forall a. Decoder a -> Decoder (List a)
+    , decodeSingle : forall a. Decoder a -> Decoder a
+    }
+
+... and then the things relating to keys could be changed separately from the things
+relating to values.
+
+-}
+type alias KeyValue key value =
     { decodeKey : Decoder key
     , decodeMultiple : Decoder ( key, value ) -> Decoder (List ( key, value ))
     , decodeSingle : Decoder ( key, value ) -> Decoder ( key, value )
     , decodeValue : Decoder value
-    , encodeParams : params -> List ( String, String )
-    , encodePostedValue : posted -> Value
     , encodeValue : value -> Value
     , keyToUrlPart : key -> String
-    , mapError : Http.Error -> error
-    , path : String
-    , tokenStrategy : TokenStrategy
     }
+
+
+{-| Use the supplied settings for the `key` and `value` with this endpoint.
+
+For complicated reasons, these must all be specified together.
+
+-}
+withKeyValue : KeyValue key value -> EndPoint error params a b posted -> EndPoint error params key value posted
+withKeyValue kv (EndPoint endpoint) =
+    EndPoint { endpoint | kv = kv }
+
+
+{-| Use the supplied function to encode `params` for queries with this endpoint.
+-}
+withParams : (params -> List ( String, String )) -> EndPoint error p key value posted -> EndPoint error params key value posted
+withParams encodeParams (EndPoint endpoint) =
+    EndPoint { endpoint | encodeParams = encodeParams }
+
+
+{-| Use the supplied function to encode new `posted` values.
+-}
+withPostedValue : (posted -> Value) -> EndPoint error params key value a -> EndPoint error params key value posted
+withPostedValue encodePostedValue (EndPoint endpoint) =
+    EndPoint { endpoint | encodePostedValue = encodePostedValue }
+
+
+{-| Use the supplied function to convert `Http.Error` to your desired `error` type.
+-}
+withError : (Error -> error) -> EndPoint a params key value posted -> EndPoint error params key value posted
+withError mapError (EndPoint endpoint) =
+    EndPoint { endpoint | mapError = mapError }
+
+
+{-| Use the supplied path for this endpoint.
+-}
+withPath : String -> EndPoint error params key value posted -> EndPoint error params key value posted
+withPath path (EndPoint endpoint) =
+    EndPoint { endpoint | path = path }
+
+
+{-| Use the supplied token strategy.
+-}
+withTokenStrategy : TokenStrategy -> EndPoint error params key value posted -> EndPoint error params key value posted
+withTokenStrategy tokenStrategy (EndPoint endpoint) =
+    EndPoint { endpoint | tokenStrategy = tokenStrategy }
 
 
 {-| Construct a Drupal-oriented endpoint, with as many defaults filled in as possible.
@@ -173,20 +237,23 @@ Yes, just three parameters! We'll supplement that with various Drupal-oriented d
     But you can change that with ...
 
 -}
-drupalEndpoint : String -> Decoder value -> (value -> Value) -> EndPoint Http.Error () (EntityId a) value value
+drupalEndpoint : String -> Decoder value -> (value -> Value) -> EndPoint Error () (EntityId a) value value
 drupalEndpoint path decodeValue encodeValue =
-    { decodeKey = decodeId toEntityId
-    , decodeMultiple = decodeDrupalList
-    , decodeSingle = decodeSingleEntity
-    , decodeValue = decodeValue
-    , encodeParams = always []
-    , encodePostedValue = encodeValue
-    , encodeValue = encodeValue
-    , keyToUrlPart = fromEntityId >> toString
-    , mapError = identity
-    , path = path
-    , tokenStrategy = TokenUrlParam "access_token"
-    }
+    EndPoint
+        { kv =
+            { decodeKey = decodeId toEntityId
+            , decodeMultiple = decodeDrupalList
+            , decodeSingle = decodeSingleEntity
+            , decodeValue = decodeValue
+            , encodeValue = encodeValue
+            , keyToUrlPart = fromEntityId >> toString
+            }
+        , encodeParams = always []
+        , encodePostedValue = encodeValue
+        , mapError = identity
+        , path = path
+        , tokenStrategy = TokenUrlParam "access_token"
+        }
 
 
 {-| Produces an `EndPoint` with very basic defaults ... it will need customization to actuall work
@@ -197,20 +264,23 @@ with the JSON your backend returns.
   - The third parameter is an encoder for your `value` type.
 
 -}
-endpoint : String -> Decoder value -> (value -> Value) -> EndPoint Http.Error () Int value value
+endpoint : String -> Decoder value -> (value -> Value) -> EndPoint Error () Int value value
 endpoint path decodeValue encodeValue =
-    { decodeKey = decodeId identity
-    , decodeMultiple = list
-    , decodeSingle = identity
-    , decodeValue = decodeValue
-    , encodeParams = always []
-    , encodePostedValue = encodeValue
-    , encodeValue = encodeValue
-    , keyToUrlPart = toString
-    , mapError = identity
-    , path = path
-    , tokenStrategy = TokenUrlParam "access_token"
-    }
+    EndPoint
+        { kv =
+            { decodeKey = decodeId identity
+            , decodeMultiple = list
+            , decodeSingle = identity
+            , decodeValue = decodeValue
+            , encodeValue = encodeValue
+            , keyToUrlPart = toString
+            }
+        , encodeParams = always []
+        , encodePostedValue = encodeValue
+        , mapError = identity
+        , path = path
+        , tokenStrategy = TokenUrlParam "access_token"
+        }
 
 
 {-| We can use two strategies to send an `AccessToken` to the backend -- either an
@@ -275,18 +345,18 @@ withAccessToken strategy maybeToken builder =
             builder
 
 
-expectMultiple : EndPoint error params key value posted -> RequestBuilder a -> RequestBuilder (List ( key, value ))
-expectMultiple endpoint =
-    map2 (,) endpoint.decodeKey endpoint.decodeValue
-        |> endpoint.decodeMultiple
+expectMultiple : KeyValue key value -> RequestBuilder a -> RequestBuilder (List ( key, value ))
+expectMultiple kv =
+    map2 (,) kv.decodeKey kv.decodeValue
+        |> kv.decodeMultiple
         |> expectJson
         |> withExpect
 
 
-expectSingle : EndPoint error params key value posted -> RequestBuilder a -> RequestBuilder ( key, value )
-expectSingle endpoint =
-    map2 (,) endpoint.decodeKey endpoint.decodeValue
-        |> endpoint.decodeSingle
+expectSingle : KeyValue key value -> RequestBuilder a -> RequestBuilder ( key, value )
+expectSingle kv =
+    map2 (,) kv.decodeKey kv.decodeValue
+        |> kv.decodeSingle
         |> expectJson
         |> withExpect
 
@@ -296,10 +366,10 @@ expectSingle endpoint =
 need to fulfill the more specific type signature in `Endpoint.decodeSingle` ...
 fortunately, in the cases we need that, we actually know the key!
 -}
-expectSingleWithKey : EndPoint error params key value posted -> key -> RequestBuilder a -> RequestBuilder value
-expectSingleWithKey endpoint key =
-    map2 (,) (succeed key) endpoint.decodeValue
-        |> endpoint.decodeSingle
+expectSingleWithKey : KeyValue key value -> key -> RequestBuilder a -> RequestBuilder value
+expectSingleWithKey kv key =
+    map2 (,) (succeed key) kv.decodeValue
+        |> kv.decodeSingle
         |> map Tuple.second
         |> expectJson
         |> withExpect
@@ -313,11 +383,11 @@ a `RemoteData.fromResult` if you like.
 
 -}
 select : BackendUrl -> Maybe AccessToken -> EndPoint error params key value posted -> params -> (Result error (List ( key, value )) -> msg) -> Cmd msg
-select backendUrl accessToken endpoint params tagger =
+select backendUrl accessToken ((EndPoint endpoint) as ep) params tagger =
     HttpBuilder.get (backendUrl </> endpoint.path)
         |> withQueryParams (endpoint.encodeParams params)
         |> withAccessToken endpoint.tokenStrategy accessToken
-        |> expectMultiple endpoint
+        |> expectMultiple endpoint.kv
         |> send (Result.mapError endpoint.mapError >> tagger)
 
 
@@ -330,10 +400,11 @@ instead.
 
 -}
 get : BackendUrl -> Maybe AccessToken -> EndPoint error params key value posted -> key -> (Result error (Maybe ( key, value )) -> msg) -> Cmd msg
-get backendUrl accessToken endpoint key tagger =
-    HttpBuilder.get (urlForKey backendUrl endpoint key)
+get backendUrl accessToken ((EndPoint endpoint) as ep) key tagger =
+    urlForKey backendUrl ep key
+        |> HttpBuilder.get
         |> withAccessToken endpoint.tokenStrategy accessToken
-        |> expectSingle endpoint
+        |> expectSingle endpoint.kv
         |> send
             (\result ->
                 let
@@ -357,21 +428,23 @@ get backendUrl accessToken endpoint key tagger =
 {-| Let `get`, but treats a 404 response as an error in the `Result`, rather than a `Nothing` response.
 -}
 get404 : BackendUrl -> Maybe AccessToken -> EndPoint error params key value posted -> key -> (Result error ( key, value ) -> msg) -> Cmd msg
-get404 backendUrl accessToken endpoint key tagger =
-    HttpBuilder.get (urlForKey backendUrl endpoint key)
+get404 backendUrl accessToken ((EndPoint endpoint) as ep) key tagger =
+    urlForKey backendUrl ep key
+        |> HttpBuilder.get
         |> withAccessToken endpoint.tokenStrategy accessToken
-        |> expectSingle endpoint
+        |> expectSingle endpoint.kv
         |> send (Result.mapError endpoint.mapError >> tagger)
 
 
 {-| Sends a `POST` request to create the specified value.
 -}
 post : BackendUrl -> Maybe AccessToken -> EndPoint error params key value posted -> value -> (Result error ( key, value ) -> msg) -> Cmd msg
-post backendUrl accessToken endpoint value tagger =
-    HttpBuilder.post (backendUrl </> endpoint.path)
+post backendUrl accessToken ((EndPoint endpoint) as ep) value tagger =
+    (backendUrl </> endpoint.path)
+        |> HttpBuilder.post
         |> withAccessToken endpoint.tokenStrategy accessToken
-        |> expectSingle endpoint
-        |> withJsonBody (endpoint.encodeValue value)
+        |> expectSingle endpoint.kv
+        |> withJsonBody (endpoint.kv.encodeValue value)
         |> send (Result.mapError endpoint.mapError >> tagger)
 
 
@@ -382,21 +455,23 @@ can use `put_` instead.
 
 -}
 put : BackendUrl -> Maybe AccessToken -> EndPoint error params key value posted -> key -> value -> (Result error value -> msg) -> Cmd msg
-put backendUrl accessToken endpoint key value tagger =
-    HttpBuilder.put (urlForKey backendUrl endpoint key)
+put backendUrl accessToken ((EndPoint endpoint) as ep) key value tagger =
+    urlForKey backendUrl ep key
+        |> HttpBuilder.put
         |> withAccessToken endpoint.tokenStrategy accessToken
-        |> expectSingleWithKey endpoint key
-        |> withJsonBody (endpoint.encodeValue value)
+        |> expectSingleWithKey endpoint.kv key
+        |> withJsonBody (endpoint.kv.encodeValue value)
         |> send (Result.mapError endpoint.mapError >> tagger)
 
 
 {-| Like `put`, but ignores any value sent by the backend back ... just interprets errors.
 -}
 put_ : BackendUrl -> Maybe AccessToken -> EndPoint error params key value posted -> key -> value -> (Result error () -> msg) -> Cmd msg
-put_ backendUrl accessToken endpoint key value tagger =
-    HttpBuilder.put (urlForKey backendUrl endpoint key)
+put_ backendUrl accessToken ((EndPoint endpoint) as ep) key value tagger =
+    urlForKey backendUrl ep key
+        |> HttpBuilder.put
         |> withAccessToken endpoint.tokenStrategy accessToken
-        |> withJsonBody (endpoint.encodeValue value)
+        |> withJsonBody (endpoint.kv.encodeValue value)
         |> send (Result.mapError endpoint.mapError >> tagger)
 
 
@@ -412,10 +487,11 @@ you can use `patch_` instead.
 
 -}
 patch : BackendUrl -> Maybe AccessToken -> EndPoint error params key value posted -> key -> Value -> (Result error value -> msg) -> Cmd msg
-patch backendUrl accessToken endpoint key value tagger =
-    HttpBuilder.patch (urlForKey backendUrl endpoint key)
+patch backendUrl accessToken ((EndPoint endpoint) as ep) key value tagger =
+    urlForKey backendUrl ep key
+        |> HttpBuilder.patch
         |> withAccessToken endpoint.tokenStrategy accessToken
-        |> expectSingleWithKey endpoint key
+        |> expectSingleWithKey endpoint.kv key
         |> withJsonBody value
         |> send (Result.mapError endpoint.mapError >> tagger)
 
@@ -423,8 +499,9 @@ patch backendUrl accessToken endpoint key value tagger =
 {-| Like `patch`, but doesn't try to decode the response ... just reports errors.
 -}
 patch_ : BackendUrl -> Maybe AccessToken -> EndPoint error params key value posted -> key -> Value -> (Result error () -> msg) -> Cmd msg
-patch_ backendUrl accessToken endpoint key value tagger =
-    HttpBuilder.patch (urlForKey backendUrl endpoint key)
+patch_ backendUrl accessToken ((EndPoint endpoint) as ep) key value tagger =
+    urlForKey backendUrl ep key
+        |> HttpBuilder.patch
         |> withAccessToken endpoint.tokenStrategy accessToken
         |> withJsonBody value
         |> send (Result.mapError endpoint.mapError >> tagger)
@@ -433,8 +510,9 @@ patch_ backendUrl accessToken endpoint key value tagger =
 {-| Delete entity.
 -}
 delete : BackendUrl -> Maybe AccessToken -> EndPoint error params key value posted -> key -> (Result error () -> msg) -> Cmd msg
-delete backendUrl accessToken endpoint key tagger =
-    HttpBuilder.delete (urlForKey backendUrl endpoint key)
+delete backendUrl accessToken ((EndPoint endpoint) as ep) key tagger =
+    urlForKey backendUrl ep key
+        |> HttpBuilder.delete
         |> withAccessToken endpoint.tokenStrategy accessToken
         |> send (Result.mapError endpoint.mapError >> tagger)
 
@@ -581,5 +659,5 @@ encodeEntityUuid =
 
 
 urlForKey : BackendUrl -> EndPoint error params key value posted -> key -> String
-urlForKey backendUrl endpoint key =
-    backendUrl </> endpoint.path </> endpoint.keyToUrlPart key
+urlForKey backendUrl (EndPoint endpoint) key =
+    backendUrl </> endpoint.path </> endpoint.kv.keyToUrlPart key
