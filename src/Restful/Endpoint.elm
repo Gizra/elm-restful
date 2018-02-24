@@ -404,7 +404,7 @@ Yes, just three parameters! We'll supplement that with various Drupal-oriented d
     But you can change that with `withTokenStrategy`.
 
 -}
-drupalEndpoint : String -> Decoder value -> (value -> Value) -> EndPoint Error () (EntityId a) value value
+drupalEndpoint : String -> Decoder value -> (value -> Value) -> EndPoint Error p (EntityId a) value value
 drupalEndpoint path decodeValue encodeValue =
     EndPoint
         { decodeKey = decodeDrupalId toEntityId
