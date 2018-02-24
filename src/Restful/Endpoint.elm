@@ -2,15 +2,17 @@ module Restful.Endpoint
     exposing
         ( (</>)
         , AccessToken
+        , Backend
         , BackendUrl
         , EndPoint
         , EntityId
         , EntityUuid
         , TokenStrategy
-        , UnwrapResponses
+        , backend
         , decodeEntityId
         , decodeEntityUuid
         , delete
+        , drupalBackend
         , drupalEndpoint
         , encodeEntityId
         , encodeEntityUuid
@@ -29,16 +31,16 @@ module Restful.Endpoint
         , toEntityUuid
         , tokenHeader
         , tokenUrlParam
-        , unwrapDrupalResponses
-        , unwrapPlainResponses
-        , unwrapResponses
+        , withBackend
+        , withDrupalResponses
+        , withPlainResponses
+        , withResponses
         , withCreatedType
         , withErrorType
         , withKeyType
         , withParamsType
         , withPath
         , withTokenStrategy
-        , withUnwrapResponses
         , withValueType
         )
 
@@ -46,11 +48,16 @@ module Restful.Endpoint
 backend entities exposed through a Restful HTTP API.
 
 
-## Constructing Endpoints
+## Backends
+
+@docs Backend, backend, drupalBackend
+@docs withResponses, withDrupalResponses, withPlainResponses
+
+
+## Endpoints
 
 @docs EndPoint, drupalEndpoint, endpoint
-@docs UnwrapResponses, unwrapResponses, unwrapDrupalResponses, unwrapPlainResponses
-@docs withKeyType, withValueType, withUnwrapResponses, withParamsType, withCreatedType, withErrorType, withPath, withTokenStrategy
+@docs withBackend, withKeyType, withValueType, withParamsType, withCreatedType, withErrorType, withPath, withTokenStrategy
 
 
 ## Access Tokens
@@ -154,35 +161,41 @@ type EndPoint error params key value created
         }
 
 
-{-| Typically, your backend will "wrap" the JSON for responses in some way.
-For instance, Drupal sends back something like this for a `POST` request:
+{-| Common configuration for endpoints connected to a particular backend.
 
-    { data :
-        [
-            {
-                id: 27,
-                label: "The label",
-                ...
-            }
-        ]
-    }
-
-So, before we apply the decoder for the key or the value, we need to "unwrap"
-the `data` field.
-
-This type tracks the methods we should use to do this kind of unwrapping. You
-can construct it with `unwrapResponses`, or use the pre-built `unwrapDrupalResponses`
-to do it the Drupal way.
+You might wonder why the `BackendUrl` could not be specified here, rather than
+asking for it with each CRUD request. The reason is that, in our setups, the
+`BackendUrl` is typically provided a run-time, whereas the rest of the
+information needed to construct the `Backend` or an `EndPoint` is known at
+compile-time. So, it's convenient to construct the `Backend` and
+`EndPoint` values statically, without requiring parameters.
 
 -}
-type UnwrapResponses a
-    = UnwrapResponses
-        { single : Decoder a -> Decoder a
-        , multiple : Decoder a -> Decoder (List a)
+type Backend a
+    = Backend
+        { decodeSingle : Decoder a -> Decoder a
+        , decodeMultiple : Decoder a -> Decoder (List a)
         }
 
 
-{-| Specify how to unwrap responses.
+{-| Constructs a default `Backend`, which decodes responses via `withPlainResponses`.
+-}
+backend : Backend a
+backend =
+    Backend
+        { decodeSingle = identity
+        , decodeMultiple = Json.Decode.list
+        }
+
+
+{-| A `Backend` which decodes the kind of responses a Drupal backend sends.
+-}
+drupalBackend : Backend a
+drupalBackend =
+    withDrupalResponses backend
+
+
+{-| Specify how to unwrap responses produced by the backend.
 
   - The first parameter is used for functions like `get`, which return only one
     value. So, the question is: given what the backend sends, what do we need to
@@ -202,11 +215,12 @@ type UnwrapResponses a
 For a pre-built version that handles how Drupal sends responses, see `unwrapDrupalResponses`.
 
 -}
-unwrapResponses : (Decoder a -> Decoder a) -> (Decoder a -> Decoder (List a)) -> UnwrapResponses a
-unwrapResponses single multiple =
-    UnwrapResponses
-        { single = single
-        , multiple = multiple
+withResponses : (Decoder a -> Decoder a) -> (Decoder a -> Decoder (List a)) -> Backend b -> Backend a
+withResponses decodeSingle decodeMultiple (Backend backend) =
+    Backend
+        { backend
+            | decodeSingle = decodeSingle
+            , decodeMultiple = decodeMultiple
         }
 
 
@@ -219,14 +233,14 @@ unwrapResponses single multiple =
 
 So, this is equivalent to something like:
 
-    unwrapResponses
+    withResponses
         (field "data" << index 0)
         (field "data" << list)
 
 -}
-unwrapDrupalResponses : UnwrapResponses a
-unwrapDrupalResponses =
-    unwrapResponses decodeDrupalSingle decodeDrupalList
+withDrupalResponses : Backend a -> Backend b
+withDrupalResponses =
+    withResponses decodeDrupalSingle decodeDrupalList
 
 
 {-| Unwrap responses in the simplest possible way:
@@ -238,26 +252,22 @@ unwrapDrupalResponses =
 
 So, this is equivalent to:
 
-    unwrapResponses identity Json.Decode.list
+    withResponses identity Json.Decode.list
 
 -}
-unwrapPlainResponses : UnwrapResponses a
-unwrapPlainResponses =
-    unwrapResponses identity list
+withPlainResponses : Backend a -> Backend b
+withPlainResponses =
+    withResponses identity list
 
 
-{-| Use the supplied method to unwrap responses provided by the backend.
-
-To construct an `UnwrapResponses`, see `unwrapResponses`, `unwrapDrupalResponses`,
-and `unwrapPlainResponses`.
-
+{-| Use the supplied backend with the endpoint.
 -}
-withUnwrapResponses : UnwrapResponses ( k, v ) -> EndPoint e p k v c -> EndPoint e p k v c
-withUnwrapResponses (UnwrapResponses unwrapper) (EndPoint endpoint) =
+withBackend : Backend ( k, v ) -> EndPoint e p k v c -> EndPoint e p k v c
+withBackend (Backend backend) (EndPoint endpoint) =
     EndPoint
         { endpoint
-            | decodeSingle = unwrapper.single
-            , decodeMultiple = unwrapper.multiple
+            | decodeSingle = backend.decodeSingle
+            , decodeMultiple = backend.decodeMultiple
         }
 
 
@@ -271,17 +281,16 @@ The second parameter helps construct the URL for cases where the `key` is
 included in the URL (e.g. PUT, PATCH or DELETE). Given your `key`, what should
 we put after the endpoint's `path`?
 
-The third parameter describes how your backend wraps its responses. You have to
-supply it again even if it hasn't changed, for complicated reasons that I'll blog
-about some day.
+The third parameter must be provided even if it hasn't changed, for complicated
+reasons that I'll blog about someday (the lack of Rank-N types).
 
 -}
-withKeyType : Decoder key -> (key -> String) -> UnwrapResponses ( key, v ) -> EndPoint e p k v c -> EndPoint e p key v c
-withKeyType (UnwrapResponses unwrapper) decodeKey keyToUrlPart (EndPoint endpoint) =
+withKeyType : Decoder key -> (key -> String) -> Backend ( key, v ) -> EndPoint e p k v c -> EndPoint e p key v c
+withKeyType decodeKey keyToUrlPart (Backend backend) (EndPoint endpoint) =
     EndPoint
         { endpoint
-            | decodeSingle = unwrapper.single
-            , decodeMultiple = unwrapper.multiple
+            | decodeSingle = backend.decodeSingle
+            , decodeMultiple = backend.decodeMultiple
             , decodeKey = decodeKey
             , keyToUrlPart = keyToUrlPart
         }
@@ -292,19 +301,19 @@ withKeyType (UnwrapResponses unwrapper) decodeKey keyToUrlPart (EndPoint endpoin
 The first parameter is a decoder for your `value` type, given the JSON the
 backend returns for each item.
 
-The second parameter is an encoder for your `value` type, for use in `PUT` requests.
+The second parameter is an encoder for your `value` type, for use in `PUT`
+requests.
 
-The third parameter describes how your backend wraps its responses. You have to
-supply it again even if it hasn't changed, for complicated reasons that I'll blog
-about some day.
+The third parameter must be provided even if it hasn't changed, for complicated
+reasons that I'll blog about someday (the lack of Rank-N types).
 
 -}
-withValueType : UnwrapResponses ( k, value ) -> Decoder value -> (value -> Value) -> EndPoint e p k v c -> EndPoint e p k value c
-withValueType (UnwrapResponses unwrapper) decodeValue encodeValue (EndPoint endpoint) =
+withValueType : Decoder value -> (value -> Value) -> Backend ( k, value ) -> EndPoint e p k v c -> EndPoint e p k value c
+withValueType decodeValue encodeValue (Backend backend) (EndPoint endpoint) =
     EndPoint
         { endpoint
-            | decodeSingle = unwrapper.single
-            , decodeMultiple = unwrapper.multiple
+            | decodeSingle = backend.decodeSingle
+            , decodeMultiple = backend.decodeMultiple
             , decodeValue = decodeValue
             , encodeValue = encodeValue
         }
