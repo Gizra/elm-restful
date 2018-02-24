@@ -6,8 +6,8 @@ module Restful.Endpoint
         , EndPoint
         , EntityId
         , EntityUuid
-        , KeyValue
         , TokenStrategy
+        , UnwrapResponses
         , decodeEntityId
         , decodeEntityUuid
         , delete
@@ -29,23 +29,28 @@ module Restful.Endpoint
         , toEntityUuid
         , tokenHeader
         , tokenUrlParam
-        , withError
-        , withKeyValue
-        , withParams
+        , unwrapDrupalResponses
+        , unwrapPlainResponses
+        , unwrapResponses
+        , withCreatedType
+        , withErrorType
+        , withKeyType
+        , withParamsType
         , withPath
-        , withPostedValue
         , withTokenStrategy
+        , withUnwrapResponses
+        , withValueType
         )
 
-{-| These functions facilitate CRUD operations upon entities exposed through a
-Restful API. It is oriented towards a Drupal backend, but could be used (or
-modified to use) with other backends that produce similar JSON.
+{-| These functions and types are intended to facilitate CRUD operations upon
+backend entities exposed through a Restful HTTP API.
 
 
 ## Constructing Endpoints
 
 @docs EndPoint, drupalEndpoint, endpoint
-@docs KeyValue, withKeyValue, withParams, withPostedValue, withError, withPath, withTokenStrategy
+@docs UnwrapResponses, unwrapResponses, unwrapDrupalResponses, unwrapPlainResponses
+@docs withKeyType, withValueType, withUnwrapResponses, withParamsType, withCreatedType, withErrorType, withPath, withTokenStrategy
 
 
 ## Access Tokens
@@ -95,188 +100,338 @@ type alias AccessToken =
     String
 
 
-{-| This is a start at a nicer idiom for dealing with Restful JSON endpoints.
-The basic idea is to include in this type all those things about an endpoint
-which don't change. For instance, we know the path of the endpoint, what kind
-of JSON it emits, etc. -- that never varies.
+{-| This represents an idiom for dealing with Restful JSON endpoints.
+The basic idea is to include in the `EndPoint` type all those things about an
+endpoint which don't change. For instance, we know the path to the endpoint,
+what kind of JSON it emits, etc. -- that never varies.
 
 The structure is somewhat specialized for a headless Drupal backend using its
-Restful module. However, it may work in other REST environments (let us know
-if any changes are needed to handle your case).
+Restful module. However, it should be adaptable for use in other REST
+environments (let us know if any changes are needed to handle your case).
 
-The parameters have the following significance.
+The type parameters have the following significance.
 
 | Type | Significance |
 | ---- | ------------ |
 | `error` | Your error type. <p>If you don't want to do something special with errors, then it can just be `Http.Error` |
 | `params` | A type for the query params that this endpoint uses. <p>If your endpoint doesn't take params, just use `()` (or, a phantom type variable, if you like). |
-| `key` | Your ID type. We usually use some kind of `EntityId`. |
+| `key` | Your ID type. We usually use some kind of `EntityId`, but you can use something else if you like. |
 | `value` | Your value type. |
-| `posted` | The type you would use in POST requests, when creating a new value. May be missing some information from `value` which the backend will supply. May be the same as `value` if POST isn't special. |
+| `created` | The type you would use in POST requests, when creating a new value. May be missing some information from `value` which the backend will supply. May be the same as `value` if POST isn't special. |
 
-The fields you need to fill in for an endpoint are as follows:
-
-| Field | Usage |
-| ----- | ----- |
-| `decodeKey` | Given the JSON the backend returns for each item, how can we decode your `key` type? <p>If you're using a kind of `EntityId`, for the `key`, then you can just supply `decodeEntityId`. |
-| `decodeMultiple` | For requests like `select`, which return multiple values, what do we need to decode to get a list we can apply `decodeKey` or `decodeVvalue` to? |
-| `decodeSingle` | For requests like `get`, which return a single value, what do we need to decode before we apply `decodeKey` or `decodeValue`? That is, how must we traverse the JSON to get to the value which `decodeKey` or `decodeValue` can decode? |
-| `decodeValue` | Given the JSON the backend returns for each item, how can we decode your `value` type? |
-| `encodeParams` | Takes your `params` type and converts it into something we can feed to `HttpBuilder.withQueryParams`. So, you get type-safety for the params! If you never take params, you can supply `always []`. |
-| `encodePostedValue` | An encoder for your `postedValue`, used when creating new values using POST requests. May be the same as `encodeValue` if POST isn't special in your case. |
-| `encodeValue` | An encoder for your `value` type (e.g. for PUT). |
-| `keyToUrlPart` | Given your `key`, what should we put after the `path` in a URL to refer to this entity (e.g. for PATCH, PUT or DELETE)? |
-| `mapError` | Converts an `Http.Error` to the more meaningful `error` type you'd like to use. Or, just supply `identity` if your `error` type is `Http.Error`. |
-| `path` | The relative path to the endpoint ... that is, the part that varies between one endpoint and another, as a suffix to the `BackendUrl`. |
-| `tokenStrategy` | Given an `AccessToken`, how should we pass it to the backend? |
+To create an `EndPoint`, start with `drupalEndpoint` (or `endpoint`), and then use the various
+`with...` functions to customize it as needed.
 
 -}
-type EndPoint error params key value posted
+type EndPoint error params key value created
     = EndPoint
-        { encodeParams : params -> List ( String, String )
-        , encodePostedValue : posted -> Value
-        , kv : KeyValue key value
+        -- Ideally, `decodeSingle` and `decodeMultiple` would remember that
+        -- their "real" type signature is the more general:
+        --
+        -- , decodeMultiple : forall a. Decoder a -> Decoder (List a)
+        -- , decodeSingle : forall a. Decoder a -> Decoder a
+        --
+        -- ... but Elm doesn't have Rank-N types, so there is no way to
+        -- remember that they can operate on any type. (We could add an `a`
+        -- type to `EndPoint`, but that doesn't help because the compiler would
+        -- fix it as `(key, value)` anyway, through type inference.)
+        --
+        -- To work around that, we define `decodeMultiple` and `decodeSingle`
+        -- in their more polymorphic form in a separate `UnwrapResponses` type,
+        -- and require that to be supplied to several configuration functions,
+        -- even if unchanged.
+        { decodeKey : Decoder key
+        , decodeMultiple : Decoder ( key, value ) -> Decoder (List ( key, value ))
+        , decodeSingle : Decoder ( key, value ) -> Decoder ( key, value )
+        , decodeValue : Decoder value
+        , encodeCreatedValue : created -> Value
+        , encodeParams : params -> List ( String, String )
+        , encodeValue : value -> Value
+        , keyToUrlPart : key -> String
         , mapError : Error -> error
         , path : String
         , tokenStrategy : TokenStrategy
         }
 
 
-{-| Various things which relate to the key and value. These all need to be changed
-together ... they could be split up a bit if Elm had Rank-N types ... in that case,
-we'd use:
+{-| Typically, your backend will "wrap" the JSON for responses in some way.
+For instance, Drupal sends back something like this for a `POST` request:
 
-    { decodeMultiple : forall a. Decoder a -> Decoder (List a)
-    , decodeSingle : forall a. Decoder a -> Decoder a
+    { data :
+        [
+            {
+                id: 27,
+                label: "The label",
+                ...
+            }
+        ]
     }
 
-... and then the things relating to keys could be changed separately from the things
-relating to values.
+So, before we apply the decoder for the key or the value, we need to "unwrap"
+the `data` field.
+
+This type tracks the methods we should use to do this kind of unwrapping. You
+can construct it with `unwrapResponses`, or use the pre-built `unwrapDrupalResponses`
+to do it the Drupal way.
 
 -}
-type alias KeyValue key value =
-    { decodeKey : Decoder key
-    , decodeMultiple : Decoder ( key, value ) -> Decoder (List ( key, value ))
-    , decodeSingle : Decoder ( key, value ) -> Decoder ( key, value )
-    , decodeValue : Decoder value
-    , encodeValue : value -> Value
-    , keyToUrlPart : key -> String
-    }
+type UnwrapResponses a
+    = UnwrapResponses
+        { single : Decoder a -> Decoder a
+        , multiple : Decoder a -> Decoder (List a)
+        }
 
 
-{-| Use the supplied settings for the `key` and `value` with this endpoint.
+{-| Specify how to unwrap responses.
 
-For complicated reasons, these must all be specified together.
+  - The first parameter is used for functions like `get`, which return only one
+    value. So, the question is: given what the backend sends, what do we need to
+    decode to get an item to which we can apply the `key` or `value` decoders?
+
+    If the decoders actually operate on exactly what the backend returns, you
+    could supply `identity`.
+
+  - The second parameter is used for functions like `select`, which return a
+    list of values. So, the question is: given what the backend sends, what do
+    we need to decode to get a list of items to which we can apply the `key` or
+    `value` decoders?
+
+    If the backend actually returns just a JSON array of the things the decoders
+    can handle, you could just supply `Json.Decode.list`.
+
+For a pre-built version that handles how Drupal sends responses, see `unwrapDrupalResponses`.
 
 -}
-withKeyValue : KeyValue key value -> EndPoint error params a b posted -> EndPoint error params key value posted
-withKeyValue kv (EndPoint endpoint) =
-    EndPoint { endpoint | kv = kv }
+unwrapResponses : (Decoder a -> Decoder a) -> (Decoder a -> Decoder (List a)) -> UnwrapResponses a
+unwrapResponses single multiple =
+    UnwrapResponses
+        { single = single
+        , multiple = multiple
+        }
 
 
-{-| Use the supplied function to encode `params` for queries with this endpoint.
+{-| Unwraps responses the Drupal way.
+
+  - Single responses are sent as the first element of a JSON array, inside a
+    field called "data".
+
+  - Multiple responses are sent as a JSON array, inside a field called "data".
+
+So, this is equivalent to something like:
+
+    unwrapResponses
+        (field "data" << index 0)
+        (field "data" << list)
+
 -}
-withParams : (params -> List ( String, String )) -> EndPoint error p key value posted -> EndPoint error params key value posted
-withParams encodeParams (EndPoint endpoint) =
+unwrapDrupalResponses : UnwrapResponses a
+unwrapDrupalResponses =
+    unwrapResponses decodeDrupalSingle decodeDrupalList
+
+
+{-| Unwrap responses in the simplest possible way:
+
+  - Single responses are sent in a way that your decoders can handle directly.
+
+  - Multiple responses are sent as a JSON array of things your decoders can
+    handle directly.
+
+So, this is equivalent to:
+
+    unwrapResponses identity Json.Decode.list
+
+-}
+unwrapPlainResponses : UnwrapResponses a
+unwrapPlainResponses =
+    unwrapResponses identity list
+
+
+{-| Use the supplied method to unwrap responses provided by the backend.
+
+To construct an `UnwrapResponses`, see `unwrapResponses`, `unwrapDrupalResponses`,
+and `unwrapPlainResponses`.
+
+-}
+withUnwrapResponses : UnwrapResponses ( k, v ) -> EndPoint e p k v c -> EndPoint e p k v c
+withUnwrapResponses (UnwrapResponses unwrapper) (EndPoint endpoint) =
+    EndPoint
+        { endpoint
+            | decodeSingle = unwrapper.single
+            , decodeMultiple = unwrapper.multiple
+        }
+
+
+{-| Use the specified `key` type with this endpoint.
+
+The first parameter is a decoder for your `key` type, given the JSON the
+backend returns for each item. If you're using a kind of `EntityId`, for the
+`key`, then you can just supply `decodeEntityId`.
+
+The second parameter helps construct the URL for cases where the `key` is
+included in the URL (e.g. PUT, PATCH or DELETE). Given your `key`, what should
+we put after the endpoint's `path`?
+
+The third parameter describes how your backend wraps its responses. You have to
+supply it again even if it hasn't changed, for complicated reasons that I'll blog
+about some day.
+
+-}
+withKeyType : Decoder key -> (key -> String) -> UnwrapResponses ( key, v ) -> EndPoint e p k v c -> EndPoint e p key v c
+withKeyType (UnwrapResponses unwrapper) decodeKey keyToUrlPart (EndPoint endpoint) =
+    EndPoint
+        { endpoint
+            | decodeSingle = unwrapper.single
+            , decodeMultiple = unwrapper.multiple
+            , decodeKey = decodeKey
+            , keyToUrlPart = keyToUrlPart
+        }
+
+
+{-| Use the specified `value` type with this endpoint.
+
+The first parameter is a decoder for your `value` type, given the JSON the
+backend returns for each item.
+
+The second parameter is an encoder for your `value` type, for use in `PUT` requests.
+
+The third parameter describes how your backend wraps its responses. You have to
+supply it again even if it hasn't changed, for complicated reasons that I'll blog
+about some day.
+
+-}
+withValueType : UnwrapResponses ( k, value ) -> Decoder value -> (value -> Value) -> EndPoint e p k v c -> EndPoint e p k value c
+withValueType (UnwrapResponses unwrapper) decodeValue encodeValue (EndPoint endpoint) =
+    EndPoint
+        { endpoint
+            | decodeSingle = unwrapper.single
+            , decodeMultiple = unwrapper.multiple
+            , decodeValue = decodeValue
+            , encodeValue = encodeValue
+        }
+
+
+{-| Use the supplied function to convert your `params` type into something we can feed to
+`HttpBuilder.withQueryParams`. So, you get type-safety for the params!
+
+`endpoint` and `drupalEndpoint` both default this to `always []` (i.e. no params)
+
+-}
+withParamsType : (params -> List ( String, String )) -> EndPoint e p k v c -> EndPoint e params k v c
+withParamsType encodeParams (EndPoint endpoint) =
     EndPoint { endpoint | encodeParams = encodeParams }
 
 
-{-| Use the supplied function to encode new `posted` values.
+{-| Use the supplied function to encode new `created` values for the endpoint,
+for use in POST requests.
+
+This is for cases where some values are supplied by the backend after the
+entity is created. So, they are part of your `value` type, but you can't send
+them as part of a POST request.
+
+You can just use the same encoder as for `withValueType` if POST is not
+special.
+
 -}
-withPostedValue : (posted -> Value) -> EndPoint error params key value a -> EndPoint error params key value posted
-withPostedValue encodePostedValue (EndPoint endpoint) =
-    EndPoint { endpoint | encodePostedValue = encodePostedValue }
+withCreatedType : (created -> Value) -> EndPoint e p k v c -> EndPoint e p k v created
+withCreatedType encodeCreatedValue (EndPoint endpoint) =
+    EndPoint { endpoint | encodeCreatedValue = encodeCreatedValue }
 
 
-{-| Use the supplied function to convert `Http.Error` to your desired `error` type.
+{-| Use the supplied function to convert an `Http.Error` to your desired `error` type.
 -}
-withError : (Error -> error) -> EndPoint a params key value posted -> EndPoint error params key value posted
-withError mapError (EndPoint endpoint) =
+withErrorType : (Error -> error) -> EndPoint e p k v c -> EndPoint error p k v c
+withErrorType mapError (EndPoint endpoint) =
     EndPoint { endpoint | mapError = mapError }
 
 
-{-| Use the supplied path for this endpoint.
+{-| Use the supplied `path` for this endpoint.
+
+The path is appenend to whatever you supply for the `BackendUrl` for a request.
+
 -}
-withPath : String -> EndPoint error params key value posted -> EndPoint error params key value posted
+withPath : String -> EndPoint e p k v c -> EndPoint e p k v c
 withPath path (EndPoint endpoint) =
     EndPoint { endpoint | path = path }
 
 
-{-| Use the supplied token strategy.
+{-| Use the supplied token strategy for this endpoint.
+
+You can use `tokenHeader` or `tokenUrlParam` to construct a `TokenStrategy.
+
 -}
-withTokenStrategy : TokenStrategy -> EndPoint error params key value posted -> EndPoint error params key value posted
+withTokenStrategy : TokenStrategy -> EndPoint e p k v c -> EndPoint e p k v c
 withTokenStrategy tokenStrategy (EndPoint endpoint) =
     EndPoint { endpoint | tokenStrategy = tokenStrategy }
 
 
 {-| Construct a Drupal-oriented endpoint, with as many defaults filled in as possible.
 
-  - The first parameter is the `path` to the endpoint.
+  - The first parameter is the `path` to the endpoint (which will be appended to the
+    `BackendUrl` you provide for requests).
   - The second parameter is a decoder for your `value` type.
   - The third parameter is an encoder for your `value` type.
 
 Yes, just three parameters! We'll supplement that with various Drupal-oriented defaults:
 
   - The `key` is some kind of `EntityId`, and it can be found in an `id` field in the JSON.
-    But you can change that with ...
+    But you can change that using `withKeyType`.
 
-  - You create values with the full `value` type (not a partial `posted` type).
-    But you can change that with ...
+  - You create values with the full `value` type (not a partial `created` type).
+    But you can change that using `withCreatedType`.
 
   - Multiple values are returned as a JSON array inside a `data` field.
-    But you can change that with ...
+    But you can change that using `withUnwrapResponses`.
 
   - Single values are returned as a single-elmeent JSON array, inside a `data` field.
-    But you can change that with ...
+    But you can change that using `withUnwrapResponses`.
 
-  - Your endpoint doesn't use any URL params. But you can change that with ...
+  - Your endpoint doesn't use any URL params.
+    But you can change that using `withParamsType`.
 
-  - You're not using a custom error type. But you can change that with ...
+  - You're not using a custom error type.
+    But you can change that using `withErrorType`.
 
   - An access token, if provided, will be sent as a URL param named "access_token".
-    But you can change that with ...
+    But you can change that with `withTokenStrategy`.
 
 -}
 drupalEndpoint : String -> Decoder value -> (value -> Value) -> EndPoint Error () (EntityId a) value value
 drupalEndpoint path decodeValue encodeValue =
     EndPoint
-        { kv =
-            { decodeKey = decodeId toEntityId
-            , decodeMultiple = decodeDrupalList
-            , decodeSingle = decodeSingleEntity
-            , decodeValue = decodeValue
-            , encodeValue = encodeValue
-            , keyToUrlPart = fromEntityId >> toString
-            }
+        { decodeKey = decodeDrupalId toEntityId
+        , decodeMultiple = decodeDrupalList
+        , decodeSingle = decodeDrupalSingle
+        , decodeValue = decodeValue
+        , encodeCreatedValue = encodeValue
         , encodeParams = always []
-        , encodePostedValue = encodeValue
+        , encodeValue = encodeValue
+        , keyToUrlPart = fromEntityId >> toString
         , mapError = identity
         , path = path
         , tokenStrategy = TokenUrlParam "access_token"
         }
 
 
-{-| Produces an `EndPoint` with very basic defaults ... it will need customization to actuall work
-with the JSON your backend returns.
+{-| Produces an `EndPoint` with very basic defaults ... it will need
+customization to actually work with your endpoint.
 
-  - The first parameter is the `path` to the endpoint.
+  - The first parameter is the `path` to the endpoint (which will be appended to the
+    `BackendUrl` you provide for requests).
   - The second parameter is a decoder for your `value` type.
   - The third parameter is an encoder for your `value` type.
 
 -}
-endpoint : String -> Decoder value -> (value -> Value) -> EndPoint Error () Int value value
+endpoint : String -> Decoder value -> (value -> Value) -> EndPoint Error p Int value value
 endpoint path decodeValue encodeValue =
     EndPoint
-        { kv =
-            { decodeKey = decodeId identity
-            , decodeMultiple = list
-            , decodeSingle = identity
-            , decodeValue = decodeValue
-            , encodeValue = encodeValue
-            , keyToUrlPart = toString
-            }
+        { decodeKey = decodeDrupalId identity
+        , decodeMultiple = list
+        , decodeSingle = identity
+        , decodeValue = decodeValue
+        , encodeCreatedValue = encodeValue
         , encodeParams = always []
-        , encodePostedValue = encodeValue
+        , encodeValue = encodeValue
+        , keyToUrlPart = toString
         , mapError = identity
         , path = path
         , tokenStrategy = TokenUrlParam "access_token"
@@ -292,14 +447,14 @@ type TokenStrategy
     | TokenUrlParam String
 
 
-{-| Send the `AccessToken` to the backend using the specified HTTP header.
+{-| Send an `AccessToken` to the backend using the specified HTTP header.
 -}
 tokenHeader : String -> TokenStrategy
 tokenHeader =
     TokenHeader
 
 
-{-| Send the `AccessToken` to the backend using the specified parameter in the URL.
+{-| Send an `AccessToken` to the backend using the specified parameter in the URL.
 -}
 tokenUrlParam : String -> TokenStrategy
 tokenUrlParam =
@@ -345,31 +500,32 @@ withAccessToken strategy maybeToken builder =
             builder
 
 
-expectMultiple : KeyValue key value -> RequestBuilder a -> RequestBuilder (List ( key, value ))
-expectMultiple kv =
-    map2 (,) kv.decodeKey kv.decodeValue
-        |> kv.decodeMultiple
+expectMultiple : EndPoint e p key value c -> RequestBuilder a -> RequestBuilder (List ( key, value ))
+expectMultiple (EndPoint endpoint) =
+    map2 (,) endpoint.decodeKey endpoint.decodeValue
+        |> endpoint.decodeMultiple
         |> expectJson
         |> withExpect
 
 
-expectSingle : KeyValue key value -> RequestBuilder a -> RequestBuilder ( key, value )
-expectSingle kv =
-    map2 (,) kv.decodeKey kv.decodeValue
-        |> kv.decodeSingle
+expectSingle : EndPoint e p key value c -> RequestBuilder a -> RequestBuilder ( key, value )
+expectSingle (EndPoint endpoint) =
+    map2 (,) endpoint.decodeKey endpoint.decodeValue
+        |> endpoint.decodeSingle
         |> expectJson
         |> withExpect
 
 
 {-| We could avoid this if Elm had Rank-N types, because in that case
-`EndPoint.decodeSingle` could demand a polymorphic function. Without that, we
-need to fulfill the more specific type signature in `Endpoint.decodeSingle` ...
-fortunately, in the cases we need that, we actually know the key!
+`EndPoint.decodeSingle` could remember that it is a polymorphic function.
+Without that, we need to fulfill the more specific type signature in
+`Endpoint.decodeSingle` ... fortunately, in the cases we need that, we
+actually know the key!
 -}
-expectSingleWithKey : KeyValue key value -> key -> RequestBuilder a -> RequestBuilder value
-expectSingleWithKey kv key =
-    map2 (,) (succeed key) kv.decodeValue
-        |> kv.decodeSingle
+expectSingleWithKey : EndPoint e p key value c -> key -> RequestBuilder a -> RequestBuilder value
+expectSingleWithKey (EndPoint endpoint) key =
+    map2 (,) (succeed key) endpoint.decodeValue
+        |> endpoint.decodeSingle
         |> map Tuple.second
         |> expectJson
         |> withExpect
@@ -382,12 +538,12 @@ What we hand you is a `Result` with a list of entities, since that is the most
 a `RemoteData.fromResult` if you like.
 
 -}
-select : BackendUrl -> Maybe AccessToken -> EndPoint error params key value posted -> params -> (Result error (List ( key, value )) -> msg) -> Cmd msg
+select : BackendUrl -> Maybe AccessToken -> EndPoint error params key value created -> params -> (Result error (List ( key, value )) -> msg) -> Cmd msg
 select backendUrl accessToken ((EndPoint endpoint) as ep) params tagger =
     HttpBuilder.get (backendUrl </> endpoint.path)
         |> withQueryParams (endpoint.encodeParams params)
         |> withAccessToken endpoint.tokenStrategy accessToken
-        |> expectMultiple endpoint.kv
+        |> expectMultiple ep
         |> send (Result.mapError endpoint.mapError >> tagger)
 
 
@@ -399,12 +555,12 @@ that ID. If you'd prefer an error in that situation, you can use `get404`
 instead.
 
 -}
-get : BackendUrl -> Maybe AccessToken -> EndPoint error params key value posted -> key -> (Result error (Maybe ( key, value )) -> msg) -> Cmd msg
+get : BackendUrl -> Maybe AccessToken -> EndPoint error params key value created -> key -> (Result error (Maybe ( key, value )) -> msg) -> Cmd msg
 get backendUrl accessToken ((EndPoint endpoint) as ep) key tagger =
     urlForKey backendUrl ep key
         |> HttpBuilder.get
         |> withAccessToken endpoint.tokenStrategy accessToken
-        |> expectSingle endpoint.kv
+        |> expectSingle ep
         |> send
             (\result ->
                 let
@@ -427,24 +583,24 @@ get backendUrl accessToken ((EndPoint endpoint) as ep) key tagger =
 
 {-| Let `get`, but treats a 404 response as an error in the `Result`, rather than a `Nothing` response.
 -}
-get404 : BackendUrl -> Maybe AccessToken -> EndPoint error params key value posted -> key -> (Result error ( key, value ) -> msg) -> Cmd msg
+get404 : BackendUrl -> Maybe AccessToken -> EndPoint error params key value created -> key -> (Result error ( key, value ) -> msg) -> Cmd msg
 get404 backendUrl accessToken ((EndPoint endpoint) as ep) key tagger =
     urlForKey backendUrl ep key
         |> HttpBuilder.get
         |> withAccessToken endpoint.tokenStrategy accessToken
-        |> expectSingle endpoint.kv
+        |> expectSingle ep
         |> send (Result.mapError endpoint.mapError >> tagger)
 
 
 {-| Sends a `POST` request to create the specified value.
 -}
-post : BackendUrl -> Maybe AccessToken -> EndPoint error params key value posted -> value -> (Result error ( key, value ) -> msg) -> Cmd msg
+post : BackendUrl -> Maybe AccessToken -> EndPoint error params key value created -> value -> (Result error ( key, value ) -> msg) -> Cmd msg
 post backendUrl accessToken ((EndPoint endpoint) as ep) value tagger =
     (backendUrl </> endpoint.path)
         |> HttpBuilder.post
         |> withAccessToken endpoint.tokenStrategy accessToken
-        |> expectSingle endpoint.kv
-        |> withJsonBody (endpoint.kv.encodeValue value)
+        |> expectSingle ep
+        |> withJsonBody (endpoint.encodeValue value)
         |> send (Result.mapError endpoint.mapError >> tagger)
 
 
@@ -454,24 +610,24 @@ Assumes that the backend will respond with the full value. If that's not true, y
 can use `put_` instead.
 
 -}
-put : BackendUrl -> Maybe AccessToken -> EndPoint error params key value posted -> key -> value -> (Result error value -> msg) -> Cmd msg
+put : BackendUrl -> Maybe AccessToken -> EndPoint error params key value created -> key -> value -> (Result error value -> msg) -> Cmd msg
 put backendUrl accessToken ((EndPoint endpoint) as ep) key value tagger =
     urlForKey backendUrl ep key
         |> HttpBuilder.put
         |> withAccessToken endpoint.tokenStrategy accessToken
-        |> expectSingleWithKey endpoint.kv key
-        |> withJsonBody (endpoint.kv.encodeValue value)
+        |> expectSingleWithKey ep key
+        |> withJsonBody (endpoint.encodeValue value)
         |> send (Result.mapError endpoint.mapError >> tagger)
 
 
 {-| Like `put`, but ignores any value sent by the backend back ... just interprets errors.
 -}
-put_ : BackendUrl -> Maybe AccessToken -> EndPoint error params key value posted -> key -> value -> (Result error () -> msg) -> Cmd msg
+put_ : BackendUrl -> Maybe AccessToken -> EndPoint error params key value created -> key -> value -> (Result error () -> msg) -> Cmd msg
 put_ backendUrl accessToken ((EndPoint endpoint) as ep) key value tagger =
     urlForKey backendUrl ep key
         |> HttpBuilder.put
         |> withAccessToken endpoint.tokenStrategy accessToken
-        |> withJsonBody (endpoint.kv.encodeValue value)
+        |> withJsonBody (endpoint.encodeValue value)
         |> send (Result.mapError endpoint.mapError >> tagger)
 
 
@@ -486,19 +642,19 @@ This function assumes that the backend will send the full value back. If it won'
 you can use `patch_` instead.
 
 -}
-patch : BackendUrl -> Maybe AccessToken -> EndPoint error params key value posted -> key -> Value -> (Result error value -> msg) -> Cmd msg
+patch : BackendUrl -> Maybe AccessToken -> EndPoint error params key value created -> key -> Value -> (Result error value -> msg) -> Cmd msg
 patch backendUrl accessToken ((EndPoint endpoint) as ep) key value tagger =
     urlForKey backendUrl ep key
         |> HttpBuilder.patch
         |> withAccessToken endpoint.tokenStrategy accessToken
-        |> expectSingleWithKey endpoint.kv key
+        |> expectSingleWithKey ep key
         |> withJsonBody value
         |> send (Result.mapError endpoint.mapError >> tagger)
 
 
 {-| Like `patch`, but doesn't try to decode the response ... just reports errors.
 -}
-patch_ : BackendUrl -> Maybe AccessToken -> EndPoint error params key value posted -> key -> Value -> (Result error () -> msg) -> Cmd msg
+patch_ : BackendUrl -> Maybe AccessToken -> EndPoint error params key value created -> key -> Value -> (Result error () -> msg) -> Cmd msg
 patch_ backendUrl accessToken ((EndPoint endpoint) as ep) key value tagger =
     urlForKey backendUrl ep key
         |> HttpBuilder.patch
@@ -509,7 +665,7 @@ patch_ backendUrl accessToken ((EndPoint endpoint) as ep) key value tagger =
 
 {-| Delete entity.
 -}
-delete : BackendUrl -> Maybe AccessToken -> EndPoint error params key value posted -> key -> (Result error () -> msg) -> Cmd msg
+delete : BackendUrl -> Maybe AccessToken -> EndPoint error params key value created -> key -> (Result error () -> msg) -> Cmd msg
 delete backendUrl accessToken ((EndPoint endpoint) as ep) key tagger =
     urlForKey backendUrl ep key
         |> HttpBuilder.delete
@@ -517,49 +673,24 @@ delete backendUrl accessToken ((EndPoint endpoint) as ep) key tagger =
         |> send (Result.mapError endpoint.mapError >> tagger)
 
 
-{-| Convenience for the pattern where you have a field called "id",
-and you want to wrap the result in a type (e.g. PersonId Int). You can
-just use `decodeId PersonId`.
--}
-decodeId : (Int -> a) -> Decoder a
-decodeId wrapper =
+decodeDrupalId : (Int -> a) -> Decoder a
+decodeDrupalId wrapper =
     map wrapper (field "id" decodeInt)
 
 
-decodeData : Decoder a -> Decoder a
-decodeData =
+decodeDrupalData : Decoder a -> Decoder a
+decodeDrupalData =
     field "data"
 
 
-{-| Given a decoder for an entity, applies it to a JSON response that consists
-of a `data` field with a array of length 1, containing the entity. (This is
-what Drupal sends when you do a PUT, POST, or PATCH.)
-
-For instance, if you POST an entity, Drupal will send back the JSON for that entity,
-as the single element of an array, then wrapped in a `data` field, e.g.:
-
-    { data :
-        [
-            {
-                id: 27,
-                label: "The label",
-                ...
-            }
-        ]
-    }
-
-To decode this, write a decoder for the "inner" part (the actual entity), and then
-supply that as a parameter to `decodeSingleEntity`.
-
--}
-decodeSingleEntity : Decoder a -> Decoder a
-decodeSingleEntity =
-    decodeData << index 0
+decodeDrupalSingle : Decoder a -> Decoder a
+decodeDrupalSingle =
+    decodeDrupalData << index 0
 
 
 decodeDrupalList : Decoder a -> Decoder (List a)
 decodeDrupalList =
-    decodeData << list
+    decodeDrupalData << list
 
 
 {-| This is a wrapper for an `Int` id. It takes a "phantom" type variable
@@ -658,6 +789,6 @@ encodeEntityUuid =
     Json.Encode.string << fromEntityUuid
 
 
-urlForKey : BackendUrl -> EndPoint error params key value posted -> key -> String
+urlForKey : BackendUrl -> EndPoint error params key value created -> key -> String
 urlForKey backendUrl (EndPoint endpoint) key =
-    backendUrl </> endpoint.path </> endpoint.kv.keyToUrlPart key
+    backendUrl </> endpoint.path </> endpoint.keyToUrlPart key
