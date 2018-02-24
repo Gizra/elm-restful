@@ -144,7 +144,7 @@ type EndPoint error params key value created
         -- fix it as `(key, value)` anyway, through type inference.)
         --
         -- To work around that, we define `decodeMultiple` and `decodeSingle`
-        -- in their more polymorphic form in a separate `UnwrapResponses` type,
+        -- in their more polymorphic form in a separate `Backend` type,
         -- and require that to be supplied to several configuration functions,
         -- even if unchanged.
         { decodeKey : Decoder key
@@ -212,7 +212,7 @@ drupalBackend =
     If the backend actually returns just a JSON array of the things the decoders
     can handle, you could just supply `Json.Decode.list`.
 
-For a pre-built version that handles how Drupal sends responses, see `unwrapDrupalResponses`.
+For a pre-built version that handles how Drupal sends responses, see `withDrupalResponses`.
 
 -}
 withResponses : (Decoder a -> Decoder a) -> (Decoder a -> Decoder (List a)) -> Backend b -> Backend a
@@ -224,7 +224,7 @@ withResponses decodeSingle decodeMultiple (Backend backend) =
         }
 
 
-{-| Unwraps responses the Drupal way.
+{-| Unwrap responses the Drupal way.
 
   - Single responses are sent as the first element of a JSON array, inside a
     field called "data".
@@ -389,10 +389,10 @@ Yes, just three parameters! We'll supplement that with various Drupal-oriented d
     But you can change that using `withCreatedType`.
 
   - Multiple values are returned as a JSON array inside a `data` field.
-    But you can change that using `withUnwrapResponses`.
+    But you can change that using `withBackend`.
 
   - Single values are returned as a single-elmeent JSON array, inside a `data` field.
-    But you can change that using `withUnwrapResponses`.
+    But you can change that using `withBackend`.
 
   - Your endpoint doesn't use any URL params.
     But you can change that using `withParamsType`.
