@@ -41,7 +41,9 @@ module Restful.Endpoint
         , withDrupalResponses
         , withPlainResponses
         , withResponses
+        , withCountDecoder
         , withCreatedType
+        , withDrupalCountDecoder
         , withErrorType
         , withKeyType
         , withParamsType
@@ -58,6 +60,7 @@ backend entities exposed through a Restful HTTP API.
 
 @docs Backend, backend, drupalBackend
 @docs withResponses, withDrupalResponses, withPlainResponses
+@docs withCountDecoder, withDrupalCountDecoder
 
 
 ## Endpoints
@@ -144,24 +147,25 @@ To create an `EndPoint`, start with `drupalEndpoint` (or `endpoint`), and then u
 -}
 type EndPoint error key value created params
     = EndPoint
-        -- Ideally, `decodeSingle` and `decodeMultiple` would remember that
+        -- Ideally, `decodeSingleItem` and `decodeMultipleItems` would remember that
         -- their "real" type signature is the more general:
         --
-        -- , decodeMultiple : forall a. Decoder a -> Decoder (List a)
-        -- , decodeSingle : forall a. Decoder a -> Decoder a
+        -- , decodeMultipleItems : forall a. Decoder a -> Decoder (List a)
+        -- , decodeSingleItem : forall a. Decoder a -> Decoder a
         --
         -- ... but Elm doesn't have Rank-N types, so there is no way to
         -- remember that they can operate on any type. (We could add an `a`
         -- type to `EndPoint`, but that doesn't help because the compiler would
         -- fix it as `(key, value)` anyway, through type inference.)
         --
-        -- To work around that, we define `decodeMultiple` and `decodeSingle`
+        -- To work around that, we define `decodeMultipleItems` and `decodeSingleItem`
         -- in their more polymorphic form in a separate `Backend` type,
         -- and require that to be supplied to several configuration functions,
         -- even if unchanged.
-        { decodeKey : Decoder key
-        , decodeMultiple : Decoder ( key, value ) -> Decoder (List ( key, value ))
-        , decodeSingle : Decoder ( key, value ) -> Decoder ( key, value )
+        { decodeCount : Decoder Int
+        , decodeKey : Decoder key
+        , decodeMultipleItems : Decoder ( key, value ) -> Decoder (List ( key, value ))
+        , decodeSingleItem : Decoder ( key, value ) -> Decoder ( key, value )
         , decodeValue : Decoder value
         , encodeCreatedValue : created -> Value
         , encodeParams : params -> List ( String, String )
@@ -185,8 +189,9 @@ compile-time. So, it's convenient to construct the `Backend` and
 -}
 type Backend a
     = Backend
-        { decodeSingle : Decoder a -> Decoder a
-        , decodeMultiple : Decoder a -> Decoder (List a)
+        { decodeCount : Decoder Int
+        , decodeSingleItem : Decoder a -> Decoder a
+        , decodeMultipleItems : Decoder a -> Decoder (List a)
         }
 
 
@@ -195,9 +200,15 @@ type Backend a
 backend : Backend a
 backend =
     Backend
-        { decodeSingle = identity
-        , decodeMultiple = JD.list
+        { decodeSingleItem = identity
+        , decodeMultipleItems = JD.list
+        , decodeCount = decodeDrupalCount
         }
+
+
+decodeDrupalCount : Decoder Int
+decodeDrupalCount =
+    field "count" decodeInt
 
 
 {-| A `Backend` which decodes the kind of responses a Drupal backend sends.
@@ -228,11 +239,11 @@ For a pre-built version that handles how Drupal sends responses, see `withDrupal
 
 -}
 withResponses : (Decoder a -> Decoder a) -> (Decoder a -> Decoder (List a)) -> Backend b -> Backend a
-withResponses decodeSingle decodeMultiple (Backend backend) =
+withResponses decodeSingleItem decodeMultipleItems (Backend backend) =
     Backend
         { backend
-            | decodeSingle = decodeSingle
-            , decodeMultiple = decodeMultiple
+            | decodeSingleItem = decodeSingleItem
+            , decodeMultipleItems = decodeMultipleItems
         }
 
 
@@ -272,14 +283,31 @@ withPlainResponses =
     withResponses identity list
 
 
+{-| Given the JSON your backend returns for queries, how can we decode the
+total count of all the items on the backend? (They may not all necessarily have
+been returned, due to paging).
+-}
+withCountDecoder : Decoder Int -> Backend a -> Backend a
+withCountDecoder decodeCount (Backend backend) =
+    Backend { backend | decodeCount = decodeCount }
+
+
+{-| Decode the item count the Drupal way, by looking at a field named `count`.
+-}
+withDrupalCountDecoder : Backend a -> Backend a
+withDrupalCountDecoder =
+    withCountDecoder decodeDrupalCount
+
+
 {-| Use the supplied backend with the endpoint.
 -}
 withBackend : Backend ( k, v ) -> EndPoint e k v c p -> EndPoint e k v c p
 withBackend (Backend backend) (EndPoint endpoint) =
     EndPoint
         { endpoint
-            | decodeSingle = backend.decodeSingle
-            , decodeMultiple = backend.decodeMultiple
+            | decodeCount = backend.decodeCount
+            , decodeSingleItem = backend.decodeSingleItem
+            , decodeMultipleItems = backend.decodeMultipleItems
         }
 
 
@@ -301,8 +329,8 @@ withKeyType : Decoder key -> (key -> String) -> Backend ( key, v ) -> EndPoint e
 withKeyType decodeKey keyToUrlPart (Backend backend) (EndPoint endpoint) =
     EndPoint
         { endpoint
-            | decodeSingle = backend.decodeSingle
-            , decodeMultiple = backend.decodeMultiple
+            | decodeSingleItem = backend.decodeSingleItem
+            , decodeMultipleItems = backend.decodeMultipleItems
             , decodeKey = decodeKey
             , keyToUrlPart = keyToUrlPart
         }
@@ -324,8 +352,8 @@ withValueType : Decoder value -> (value -> Value) -> Backend ( k, value ) -> End
 withValueType decodeValue encodeValue (Backend backend) (EndPoint endpoint) =
     EndPoint
         { endpoint
-            | decodeSingle = backend.decodeSingle
-            , decodeMultiple = backend.decodeMultiple
+            | decodeSingleItem = backend.decodeSingleItem
+            , decodeMultipleItems = backend.decodeMultipleItems
             , decodeValue = decodeValue
             , encodeValue = encodeValue
         }
@@ -419,9 +447,10 @@ Yes, just three parameters! We'll supplement that with various Drupal-oriented d
 drupalEndpoint : String -> Decoder value -> (value -> Value) -> EndPoint Error (EntityId a) value value p
 drupalEndpoint path decodeValue encodeValue =
     EndPoint
-        { decodeKey = decodeDrupalId toEntityId
-        , decodeMultiple = decodeDrupalList
-        , decodeSingle = decodeDrupalSingle
+        { decodeCount = decodeDrupalCount
+        , decodeKey = decodeDrupalId toEntityId
+        , decodeMultipleItems = decodeDrupalList
+        , decodeSingleItem = decodeDrupalSingle
         , decodeValue = decodeValue
         , encodeCreatedValue = encodeValue
         , encodeParams = always []
@@ -445,9 +474,10 @@ customization to actually work with your endpoint.
 endpoint : String -> Decoder value -> (value -> Value) -> EndPoint Error Int value value p
 endpoint path decodeValue encodeValue =
     EndPoint
-        { decodeKey = decodeDrupalId identity
-        , decodeMultiple = list
-        , decodeSingle = identity
+        { decodeCount = decodeDrupalCount
+        , decodeKey = decodeDrupalId identity
+        , decodeMultipleItems = list
+        , decodeSingleItem = identity
         , decodeValue = decodeValue
         , encodeCreatedValue = encodeValue
         , encodeParams = always []
@@ -506,18 +536,15 @@ tokenUrlParam =
             left ++ right
 
 
-expectMultiple : EndPoint e key value c params -> params -> RequestBuilder a -> RequestBuilder (QueryResult key value params)
-expectMultiple (EndPoint endpoint) params =
+decodeItemList : EndPoint e k v c p -> Decoder (List ( k, v ))
+decodeItemList (EndPoint endpoint) =
     JD.map2 (,) endpoint.decodeKey endpoint.decodeValue
-        |> endpoint.decodeMultiple
-        |> JD.map
-            (\items ->
-                { items = items
-                , offset = 0
-                , params = params
-                , count = List.length items
-                }
-            )
+        |> endpoint.decodeMultipleItems
+
+
+expectMultiple : EndPoint e key value c params -> params -> RequestBuilder a -> RequestBuilder (QueryResult key value params)
+expectMultiple ((EndPoint endpoint) as ep) params =
+    JD.map2 (QueryResult params 0) (decodeItemList ep) endpoint.decodeCount
         |> expectJson
         |> withExpect
 
@@ -525,21 +552,21 @@ expectMultiple (EndPoint endpoint) params =
 expectSingle : EndPoint e key value c p -> RequestBuilder a -> RequestBuilder ( key, value )
 expectSingle (EndPoint endpoint) =
     JD.map2 (,) endpoint.decodeKey endpoint.decodeValue
-        |> endpoint.decodeSingle
+        |> endpoint.decodeSingleItem
         |> expectJson
         |> withExpect
 
 
 {-| We could avoid this if Elm had Rank-N types, because in that case
-`EndPoint.decodeSingle` could remember that it is a polymorphic function.
+`EndPoint.decodeSingleItem` could remember that it is a polymorphic function.
 Without that, we need to fulfill the more specific type signature in
-`Endpoint.decodeSingle` ... fortunately, in the cases we need that, we
+`Endpoint.decodeSingleItem` ... fortunately, in the cases we need that, we
 actually know the key!
 -}
 expectSingleWithKey : EndPoint e key value c p -> key -> RequestBuilder a -> RequestBuilder value
 expectSingleWithKey (EndPoint endpoint) key =
     JD.map2 (,) (JD.succeed key) endpoint.decodeValue
-        |> endpoint.decodeSingle
+        |> endpoint.decodeSingleItem
         |> JD.map Tuple.second
         |> expectJson
         |> withExpect
@@ -649,9 +676,9 @@ backend that our list starts at. We also remember what params we supplied,
 since that will affect the meaning of the total and the offset.
 -}
 type alias QueryResult key value params =
-    { items : List ( key, value )
-    , params : params
+    { params : params
     , offset : Int
+    , items : List ( key, value )
     , count : Int
     }
 
