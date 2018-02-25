@@ -44,14 +44,14 @@ module Restful.Endpoint
         , withCountDecoder
         , withCreatedType
         , withDrupalCountDecoder
-        , withDrupalResponses
+        , withDrupalItems
         , withErrorType
         , withItems
         , withKeyType
         , withOffsetParam
         , withParamsType
         , withPath
-        , withPlainResponses
+        , withPlainItems
         , withRangeParam
         , withTokenStrategy
         , withValueType
@@ -64,15 +64,16 @@ backend entities exposed through a Restful HTTP API.
 ## Backends
 
 @docs Backend, backend, drupalBackend
-@docs withItems, withDrupalResponses, withPlainResponses
+@docs withItems, withDrupalItems, withPlainItems
 @docs withCountDecoder, withDrupalCountDecoder
 @docs withOffsetParam, withRangeParam
+@docs withTokenStrategy
 
 
 ## Endpoints
 
 @docs EndPoint, drupalEndpoint, endpoint
-@docs withBackend, withKeyType, withValueType, withParamsType, withCreatedType, withErrorType, withPath, withTokenStrategy
+@docs withBackend, withKeyType, withValueType, withParamsType, withCreatedType, withErrorType, withPath
 
 
 ## Access Tokens
@@ -202,6 +203,7 @@ type Backend a
         , decodeSingleItem : Decoder a -> Decoder a
         , offsetParam : String
         , rangeParam : String
+        , tokenStrategy : TokenStrategy
         }
 
 
@@ -215,6 +217,7 @@ backend =
         , decodeCount = decodeDrupalCount
         , offsetParam = "offset"
         , rangeParam = "range"
+        , tokenStrategy = tokenUrlParam "access_token"
         }
 
 
@@ -227,7 +230,7 @@ decodeDrupalCount =
 -}
 drupalBackend : Backend a
 drupalBackend =
-    withDrupalResponses backend
+    withDrupalItems backend
 
 
 {-| Specify how to unwrap items sent by the backend, before applying the
@@ -260,12 +263,12 @@ withItems decodeSingleItem decodeMultipleItems (Backend backend) =
         }
 
 
-{-| Unwrap responses the Drupal way.
+{-| Unwrap items the Drupal way.
 
-  - Single responses are sent as the first element of a JSON array, inside a
+  - Single items are sent as the first element of a JSON array, inside a
     field called "data".
 
-  - Multiple responses are sent as a JSON array, inside a field called "data".
+  - Multiple items are sent as a JSON array, inside a field called "data".
 
 So, this is equivalent to something like:
 
@@ -274,16 +277,16 @@ So, this is equivalent to something like:
         (field "data" << list)
 
 -}
-withDrupalResponses : Backend a -> Backend b
-withDrupalResponses =
+withDrupalItems : Backend a -> Backend b
+withDrupalItems =
     withItems decodeDrupalSingle decodeDrupalList
 
 
-{-| Unwrap responses in the simplest possible way:
+{-| Unwrap items in the simplest possible way:
 
-  - Single responses are sent in a way that your decoders can handle directly.
+  - Single items are sent in a way that your decoders can handle directly.
 
-  - Multiple responses are sent as a JSON array of things your decoders can
+  - Multiple items are sent as a JSON array of things your decoders can
     handle directly.
 
 So, this is equivalent to:
@@ -291,8 +294,8 @@ So, this is equivalent to:
     withItems identity Json.Decode.list
 
 -}
-withPlainResponses : Backend a -> Backend b
-withPlainResponses =
+withPlainItems : Backend a -> Backend b
+withPlainItems =
     withItems identity list
 
 
@@ -326,10 +329,24 @@ withRangeParam rangeParam (Backend backend) =
     Backend { backend | rangeParam = rangeParam }
 
 
+{-| Use the supplied token strategy for this backend.
+
+You can use `tokenHeader` or `tokenUrlParam` to construct a `TokenStrategy.
+
+-}
+withTokenStrategy : TokenStrategy -> Backend a -> Backend a
+withTokenStrategy tokenStrategy (Backend backend) =
+    Backend { backend | tokenStrategy = tokenStrategy }
+
+
 {-| Use the supplied backend with the endpoint.
 -}
 withBackend : Backend ( k, v ) -> EndPoint e k v c p -> EndPoint e k v c p
 withBackend (Backend backend) (EndPoint endpoint) =
+    -- Ordinary, we'd store the whole backend in the `EndPoint` type. However,
+    -- we're trying to avoid the extra `a` type parameter, to work around Elm's
+    -- lack of Rank-N types. So, we copy what we need, specializing the
+    -- actually polymorhpic `a` to our `(k, v)` type.
     EndPoint
         { endpoint
             | decodeCount = backend.decodeCount
@@ -337,6 +354,7 @@ withBackend (Backend backend) (EndPoint endpoint) =
             , decodeMultipleItems = backend.decodeMultipleItems
             , offsetParam = backend.offsetParam
             , rangeParam = backend.rangeParam
+            , tokenStrategy = backend.tokenStrategy
         }
 
 
@@ -430,16 +448,6 @@ The path is appenend to whatever you supply for the `BackendUrl` for a request.
 withPath : String -> EndPoint e k v c p -> EndPoint e k v c p
 withPath path (EndPoint endpoint) =
     EndPoint { endpoint | path = path }
-
-
-{-| Use the supplied token strategy for this endpoint.
-
-You can use `tokenHeader` or `tokenUrlParam` to construct a `TokenStrategy.
-
--}
-withTokenStrategy : TokenStrategy -> EndPoint e k v c p -> EndPoint e k v c p
-withTokenStrategy tokenStrategy (EndPoint endpoint) =
-    EndPoint { endpoint | tokenStrategy = tokenStrategy }
 
 
 {-| Construct a Drupal-oriented endpoint, with as many defaults filled in as possible.
