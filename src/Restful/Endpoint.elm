@@ -21,6 +21,7 @@ module Restful.Endpoint
         , fromEntityId
         , fromEntityUuid
         , get
+        , modifyRequest
         , patch
         , patch_
         , post
@@ -78,7 +79,7 @@ backend entities exposed through a Restful HTTP API.
 
 # Requests
 
-@docs CrudRequest, withAccessToken, toTask, toTask404, toCmd, toCmd404
+@docs CrudRequest, withAccessToken, modifyRequest, toTask, toTask404, toCmd, toCmd404
 
 
 ## EntityId
@@ -552,7 +553,7 @@ type CrudRequest err ok
 {-| Supply an `AccessToken` to be used with the request.
 -}
 withAccessToken : AccessToken -> CrudRequest err ok -> CrudRequest err ok
-withAccessToken token (CrudRequest mapError strategy builder) =
+withAccessToken token ((CrudRequest _ strategy _) as req) =
     let
         func =
             case strategy of
@@ -562,7 +563,21 @@ withAccessToken token (CrudRequest mapError strategy builder) =
                 TokenUrlParam param ->
                     withQueryParams [ ( param, token ) ]
     in
-        CrudRequest mapError strategy (func builder)
+        modifyRequest func req
+
+
+{-| Despite all the fine work and careful thought which has gone into this
+package, perhaps there is some modification you'd like to make to the HTTP
+request before you send it. Under the hood, we're using the very fine
+`RequestBuilder` from
+[`lukewestby/elm-http-builder`](http://package.elm-lang.org/packages/lukewestby/elm-http-builder/5.1.0)
+to construct the HTTP requests. So, once you're got a `CrudRequest`, you
+can use `modifyRequest` to alter the request. But consider filing a bug
+report if it's something we could handle in the package itself!
+-}
+modifyRequest : (RequestBuilder a -> RequestBuilder b) -> CrudRequest e a -> CrudRequest e b
+modifyRequest func (CrudRequest mapError strategy builder) =
+    CrudRequest mapError strategy (func builder)
 
 
 {-| Convert a `CrudRequest` into a `Cmd`. You provide a tagger which indicates
@@ -717,6 +732,10 @@ patch_ backendUrl ((EndPoint endpoint) as ep) key value =
 
 
 {-| Delete entity.
+
+If you want to treat a 404 result as a success, use `toTask404` or `toCmd404`
+on the resulting `CrudRequest`.
+
 -}
 delete : BackendUrl -> EndPoint error params key value created -> key -> CrudRequest error ()
 delete backendUrl ((EndPoint endpoint) as ep) key =
