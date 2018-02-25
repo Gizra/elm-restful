@@ -4,6 +4,7 @@ module Restful.Endpoint
         , AccessToken
         , Backend
         , BackendUrl
+        , CrudRequest
         , EndPoint
         , EntityId
         , EntityUuid
@@ -20,17 +21,20 @@ module Restful.Endpoint
         , fromEntityId
         , fromEntityUuid
         , get
-        , get404
         , patch
         , patch_
         , post
         , put
         , put_
         , select
+        , toCmd
+        , toCmd404
         , toEntityId
         , toEntityUuid
         , tokenHeader
         , tokenUrlParam
+        , toTask
+        , toTask404
         , withBackend
         , withDrupalResponses
         , withPlainResponses
@@ -68,7 +72,12 @@ backend entities exposed through a Restful HTTP API.
 ## CRUD Operations
 
 @docs BackendUrl
-@docs get, get404, select, patch, patch_, post, put, put_, delete
+@docs get, select, patch, patch_, post, put, put_, delete
+
+
+# Requests
+
+@docs CrudRequest, toTask, toTask404, toCmd, toCmd404
 
 
 ## EntityId
@@ -92,6 +101,7 @@ import Http exposing (Error(..), expectJson)
 import HttpBuilder exposing (..)
 import Json.Decode exposing (Decoder, field, index, list, map, map2, succeed)
 import Json.Encode exposing (Value)
+import Task exposing (Task)
 
 
 {-| The base URL for a backend (i.e. the part that doesn't vary from
@@ -540,6 +550,74 @@ expectSingleWithKey (EndPoint endpoint) key =
         |> withExpect
 
 
+{-| A type representing a CRUD request. The `err` type is the kind of result you'll
+get back for errors. The `ok` type is the kind of result you'll get back if the
+request succeeds.
+
+  - You can construct requests with `select`, `get`, etc.
+
+  - You can use requests via `toTask` or `toCmd`.
+
+-}
+type CrudRequest err ok
+    = CrudRequest (Error -> err) (RequestBuilder ok)
+
+
+{-| Convert a `CrudRequest` into a `Cmd`. You provide a tagger which indicates
+which `Msg` should handle the result.
+
+If you'd prefer to get a `Task`, you can use `toTask` instead.
+
+-}
+toCmd : (Result err ok -> msg) -> CrudRequest err ok -> Cmd msg
+toCmd tagger request =
+    Task.attempt tagger (toTask request)
+
+
+{-| Like `toCmd`, but treats a 404 error specially. Instead of handling it as
+an error, it is treating as a successful result, returning `Nothing`. So, the
+success type is now wrapped in a `Maybe`. Other errors are still treated as an
+error.
+-}
+toCmd404 : (Result err (Maybe ok) -> msg) -> CrudRequest err ok -> Cmd msg
+toCmd404 tagger request =
+    Task.attempt tagger (toTask404 request)
+
+
+{-| Convert a `CrudRequest` into a `Task`.
+
+If you'd prefer to go directly to a `Cmd`, see `toCmd`.
+
+-}
+toTask : CrudRequest err ok -> Task err ok
+toTask (CrudRequest mapError builder) =
+    HttpBuilder.toTask builder
+        |> Task.mapError mapError
+
+
+{-| Like `toTask`, but treats a 404 error specially. Instead of handling it as
+an error, it is treating as a successful result, returning `Nothing`. So, the
+success type is now wrapped in a `Maybe`. Other errors are still treated as an
+error.
+-}
+toTask404 : CrudRequest err ok -> Task err (Maybe ok)
+toTask404 (CrudRequest mapError builder) =
+    HttpBuilder.toTask builder
+        |> Task.map Just
+        |> Task.onError
+            (\err ->
+                case err of
+                    BadStatus response ->
+                        if response.status.code == 404 then
+                            Task.succeed Nothing
+                        else
+                            Task.fail (mapError err)
+
+                    _ ->
+                        Task.fail (mapError err)
+            )
+
+
 {-| Select entities from an endpoint.
 
 What we hand you is a `Result` with a list of entities, since that is the most
@@ -547,70 +625,41 @@ What we hand you is a `Result` with a list of entities, since that is the most
 a `RemoteData.fromResult` if you like.
 
 -}
-select : BackendUrl -> Maybe AccessToken -> EndPoint error params key value created -> params -> (Result error (List ( key, value )) -> msg) -> Cmd msg
-select backendUrl accessToken ((EndPoint endpoint) as ep) params tagger =
+select : BackendUrl -> Maybe AccessToken -> EndPoint error params key value created -> params -> CrudRequest error (List ( key, value ))
+select backendUrl accessToken ((EndPoint endpoint) as ep) params =
     HttpBuilder.get (backendUrl </> endpoint.path)
         |> withQueryParams (endpoint.encodeParams params)
         |> withAccessToken endpoint.tokenStrategy accessToken
         |> expectMultiple ep
-        |> send (Result.mapError endpoint.mapError >> tagger)
+        |> CrudRequest endpoint.mapError
 
 
-{-| Gets a entity from the backend via its ID.
+{-| Gets a entity from the backend via its `key`.
 
-If we get a 404 error, we'll give you an `Ok Nothing`, rather than an error,
-since the request essentially succeeded ... there merely was no entity with
-that ID. If you'd prefer an error in that situation, you can use `get404`
-instead.
+Sometimes you'd like to treat a 404 error specially, since the request
+essentially succeeded ... it's just that there was no result. To do that, you
+can use `toTask404` or `toCmd404` with the resulting `CrudRequest`.
 
 -}
-get : BackendUrl -> Maybe AccessToken -> EndPoint error params key value created -> key -> (Result error (Maybe ( key, value )) -> msg) -> Cmd msg
-get backendUrl accessToken ((EndPoint endpoint) as ep) key tagger =
+get : BackendUrl -> Maybe AccessToken -> EndPoint error params key value created -> key -> CrudRequest error ( key, value )
+get backendUrl accessToken ((EndPoint endpoint) as ep) key =
     urlForKey backendUrl ep key
         |> HttpBuilder.get
         |> withAccessToken endpoint.tokenStrategy accessToken
         |> expectSingle ep
-        |> send
-            (\result ->
-                let
-                    recover =
-                        case result of
-                            Err (BadStatus response) ->
-                                if response.status.code == 404 then
-                                    Ok Nothing
-                                else
-                                    Result.map Just result
-
-                            _ ->
-                                Result.map Just result
-                in
-                    recover
-                        |> Result.mapError endpoint.mapError
-                        |> tagger
-            )
-
-
-{-| Let `get`, but treats a 404 response as an error in the `Result`, rather than a `Nothing` response.
--}
-get404 : BackendUrl -> Maybe AccessToken -> EndPoint error params key value created -> key -> (Result error ( key, value ) -> msg) -> Cmd msg
-get404 backendUrl accessToken ((EndPoint endpoint) as ep) key tagger =
-    urlForKey backendUrl ep key
-        |> HttpBuilder.get
-        |> withAccessToken endpoint.tokenStrategy accessToken
-        |> expectSingle ep
-        |> send (Result.mapError endpoint.mapError >> tagger)
+        |> CrudRequest endpoint.mapError
 
 
 {-| Sends a `POST` request to create the specified value.
 -}
-post : BackendUrl -> Maybe AccessToken -> EndPoint error params key value created -> value -> (Result error ( key, value ) -> msg) -> Cmd msg
-post backendUrl accessToken ((EndPoint endpoint) as ep) value tagger =
+post : BackendUrl -> Maybe AccessToken -> EndPoint error params key value created -> value -> CrudRequest error ( key, value )
+post backendUrl accessToken ((EndPoint endpoint) as ep) value =
     (backendUrl </> endpoint.path)
         |> HttpBuilder.post
         |> withAccessToken endpoint.tokenStrategy accessToken
         |> expectSingle ep
         |> withJsonBody (endpoint.encodeValue value)
-        |> send (Result.mapError endpoint.mapError >> tagger)
+        |> CrudRequest endpoint.mapError
 
 
 {-| Sends a `PUT` request to create the specified value.
@@ -619,25 +668,25 @@ Assumes that the backend will respond with the full value. If that's not true, y
 can use `put_` instead.
 
 -}
-put : BackendUrl -> Maybe AccessToken -> EndPoint error params key value created -> key -> value -> (Result error value -> msg) -> Cmd msg
-put backendUrl accessToken ((EndPoint endpoint) as ep) key value tagger =
+put : BackendUrl -> Maybe AccessToken -> EndPoint error params key value created -> key -> value -> CrudRequest error value
+put backendUrl accessToken ((EndPoint endpoint) as ep) key value =
     urlForKey backendUrl ep key
         |> HttpBuilder.put
         |> withAccessToken endpoint.tokenStrategy accessToken
         |> expectSingleWithKey ep key
         |> withJsonBody (endpoint.encodeValue value)
-        |> send (Result.mapError endpoint.mapError >> tagger)
+        |> CrudRequest endpoint.mapError
 
 
 {-| Like `put`, but ignores any value sent by the backend back ... just interprets errors.
 -}
-put_ : BackendUrl -> Maybe AccessToken -> EndPoint error params key value created -> key -> value -> (Result error () -> msg) -> Cmd msg
-put_ backendUrl accessToken ((EndPoint endpoint) as ep) key value tagger =
+put_ : BackendUrl -> Maybe AccessToken -> EndPoint error params key value created -> key -> value -> CrudRequest error ()
+put_ backendUrl accessToken ((EndPoint endpoint) as ep) key value =
     urlForKey backendUrl ep key
         |> HttpBuilder.put
         |> withAccessToken endpoint.tokenStrategy accessToken
         |> withJsonBody (endpoint.encodeValue value)
-        |> send (Result.mapError endpoint.mapError >> tagger)
+        |> CrudRequest endpoint.mapError
 
 
 {-| Sends a `PATCH` request for the specified key and value.
@@ -651,35 +700,35 @@ This function assumes that the backend will send the full value back. If it won'
 you can use `patch_` instead.
 
 -}
-patch : BackendUrl -> Maybe AccessToken -> EndPoint error params key value created -> key -> Value -> (Result error value -> msg) -> Cmd msg
-patch backendUrl accessToken ((EndPoint endpoint) as ep) key value tagger =
+patch : BackendUrl -> Maybe AccessToken -> EndPoint error params key value created -> key -> Value -> CrudRequest error value
+patch backendUrl accessToken ((EndPoint endpoint) as ep) key value =
     urlForKey backendUrl ep key
         |> HttpBuilder.patch
         |> withAccessToken endpoint.tokenStrategy accessToken
         |> expectSingleWithKey ep key
         |> withJsonBody value
-        |> send (Result.mapError endpoint.mapError >> tagger)
+        |> CrudRequest endpoint.mapError
 
 
 {-| Like `patch`, but doesn't try to decode the response ... just reports errors.
 -}
-patch_ : BackendUrl -> Maybe AccessToken -> EndPoint error params key value created -> key -> Value -> (Result error () -> msg) -> Cmd msg
-patch_ backendUrl accessToken ((EndPoint endpoint) as ep) key value tagger =
+patch_ : BackendUrl -> Maybe AccessToken -> EndPoint error params key value created -> key -> Value -> CrudRequest error ()
+patch_ backendUrl accessToken ((EndPoint endpoint) as ep) key value =
     urlForKey backendUrl ep key
         |> HttpBuilder.patch
         |> withAccessToken endpoint.tokenStrategy accessToken
         |> withJsonBody value
-        |> send (Result.mapError endpoint.mapError >> tagger)
+        |> CrudRequest endpoint.mapError
 
 
 {-| Delete entity.
 -}
-delete : BackendUrl -> Maybe AccessToken -> EndPoint error params key value created -> key -> (Result error () -> msg) -> Cmd msg
-delete backendUrl accessToken ((EndPoint endpoint) as ep) key tagger =
+delete : BackendUrl -> Maybe AccessToken -> EndPoint error params key value created -> key -> CrudRequest error ()
+delete backendUrl accessToken ((EndPoint endpoint) as ep) key =
     urlForKey backendUrl ep key
         |> HttpBuilder.delete
         |> withAccessToken endpoint.tokenStrategy accessToken
-        |> send (Result.mapError endpoint.mapError >> tagger)
+        |> CrudRequest endpoint.mapError
 
 
 decodeDrupalId : (Int -> a) -> Decoder a
