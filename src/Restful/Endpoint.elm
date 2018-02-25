@@ -142,7 +142,7 @@ To create an `EndPoint`, start with `drupalEndpoint` (or `endpoint`), and then u
 `with...` functions to customize it as needed.
 
 -}
-type EndPoint error params key value created
+type EndPoint error key value created params
     = EndPoint
         -- Ideally, `decodeSingle` and `decodeMultiple` would remember that
         -- their "real" type signature is the more general:
@@ -274,7 +274,7 @@ withPlainResponses =
 
 {-| Use the supplied backend with the endpoint.
 -}
-withBackend : Backend ( k, v ) -> EndPoint e p k v c -> EndPoint e p k v c
+withBackend : Backend ( k, v ) -> EndPoint e k v c p -> EndPoint e k v c p
 withBackend (Backend backend) (EndPoint endpoint) =
     EndPoint
         { endpoint
@@ -297,7 +297,7 @@ The third parameter must be provided even if it hasn't changed, for complicated
 reasons that I'll blog about someday (the lack of Rank-N types).
 
 -}
-withKeyType : Decoder key -> (key -> String) -> Backend ( key, v ) -> EndPoint e p k v c -> EndPoint e p key v c
+withKeyType : Decoder key -> (key -> String) -> Backend ( key, v ) -> EndPoint e k v c p -> EndPoint e key v c p
 withKeyType decodeKey keyToUrlPart (Backend backend) (EndPoint endpoint) =
     EndPoint
         { endpoint
@@ -320,7 +320,7 @@ The third parameter must be provided even if it hasn't changed, for complicated
 reasons that I'll blog about someday (the lack of Rank-N types).
 
 -}
-withValueType : Decoder value -> (value -> Value) -> Backend ( k, value ) -> EndPoint e p k v c -> EndPoint e p k value c
+withValueType : Decoder value -> (value -> Value) -> Backend ( k, value ) -> EndPoint e k v c p -> EndPoint e k value c p
 withValueType decodeValue encodeValue (Backend backend) (EndPoint endpoint) =
     EndPoint
         { endpoint
@@ -337,7 +337,7 @@ withValueType decodeValue encodeValue (Backend backend) (EndPoint endpoint) =
 `endpoint` and `drupalEndpoint` both default this to `always []` (i.e. no params)
 
 -}
-withParamsType : (params -> List ( String, String )) -> EndPoint e p k v c -> EndPoint e params k v c
+withParamsType : (params -> List ( String, String )) -> EndPoint e k v c p -> EndPoint e k v c params
 withParamsType encodeParams (EndPoint endpoint) =
     EndPoint { endpoint | encodeParams = encodeParams }
 
@@ -353,14 +353,14 @@ You can just use the same encoder as for `withValueType` if POST is not
 special.
 
 -}
-withCreatedType : (created -> Value) -> EndPoint e p k v c -> EndPoint e p k v created
+withCreatedType : (created -> Value) -> EndPoint e k v c p -> EndPoint e k v created p
 withCreatedType encodeCreatedValue (EndPoint endpoint) =
     EndPoint { endpoint | encodeCreatedValue = encodeCreatedValue }
 
 
 {-| Use the supplied function to convert an `Http.Error` to your desired `error` type.
 -}
-withErrorType : (Error -> error) -> EndPoint e p k v c -> EndPoint error p k v c
+withErrorType : (Error -> error) -> EndPoint e k v c p -> EndPoint error k v c p
 withErrorType mapError (EndPoint endpoint) =
     EndPoint { endpoint | mapError = mapError }
 
@@ -370,7 +370,7 @@ withErrorType mapError (EndPoint endpoint) =
 The path is appenend to whatever you supply for the `BackendUrl` for a request.
 
 -}
-withPath : String -> EndPoint e p k v c -> EndPoint e p k v c
+withPath : String -> EndPoint e k v c p -> EndPoint e k v c p
 withPath path (EndPoint endpoint) =
     EndPoint { endpoint | path = path }
 
@@ -380,7 +380,7 @@ withPath path (EndPoint endpoint) =
 You can use `tokenHeader` or `tokenUrlParam` to construct a `TokenStrategy.
 
 -}
-withTokenStrategy : TokenStrategy -> EndPoint e p k v c -> EndPoint e p k v c
+withTokenStrategy : TokenStrategy -> EndPoint e k v c p -> EndPoint e k v c p
 withTokenStrategy tokenStrategy (EndPoint endpoint) =
     EndPoint { endpoint | tokenStrategy = tokenStrategy }
 
@@ -416,7 +416,7 @@ Yes, just three parameters! We'll supplement that with various Drupal-oriented d
     But you can change that with `withTokenStrategy`.
 
 -}
-drupalEndpoint : String -> Decoder value -> (value -> Value) -> EndPoint Error p (EntityId a) value value
+drupalEndpoint : String -> Decoder value -> (value -> Value) -> EndPoint Error (EntityId a) value value p
 drupalEndpoint path decodeValue encodeValue =
     EndPoint
         { decodeKey = decodeDrupalId toEntityId
@@ -442,7 +442,7 @@ customization to actually work with your endpoint.
   - The third parameter is an encoder for your `value` type.
 
 -}
-endpoint : String -> Decoder value -> (value -> Value) -> EndPoint Error p Int value value
+endpoint : String -> Decoder value -> (value -> Value) -> EndPoint Error Int value value p
 endpoint path decodeValue encodeValue =
     EndPoint
         { decodeKey = decodeDrupalId identity
@@ -506,7 +506,7 @@ tokenUrlParam =
             left ++ right
 
 
-expectMultiple : EndPoint e p key value c -> RequestBuilder a -> RequestBuilder (List ( key, value ))
+expectMultiple : EndPoint e key value c p -> RequestBuilder a -> RequestBuilder (List ( key, value ))
 expectMultiple (EndPoint endpoint) =
     map2 (,) endpoint.decodeKey endpoint.decodeValue
         |> endpoint.decodeMultiple
@@ -514,7 +514,7 @@ expectMultiple (EndPoint endpoint) =
         |> withExpect
 
 
-expectSingle : EndPoint e p key value c -> RequestBuilder a -> RequestBuilder ( key, value )
+expectSingle : EndPoint e key value c p -> RequestBuilder a -> RequestBuilder ( key, value )
 expectSingle (EndPoint endpoint) =
     map2 (,) endpoint.decodeKey endpoint.decodeValue
         |> endpoint.decodeSingle
@@ -528,7 +528,7 @@ Without that, we need to fulfill the more specific type signature in
 `Endpoint.decodeSingle` ... fortunately, in the cases we need that, we
 actually know the key!
 -}
-expectSingleWithKey : EndPoint e p key value c -> key -> RequestBuilder a -> RequestBuilder value
+expectSingleWithKey : EndPoint e key value c p -> key -> RequestBuilder a -> RequestBuilder value
 expectSingleWithKey (EndPoint endpoint) key =
     map2 (,) (succeed key) endpoint.decodeValue
         |> endpoint.decodeSingle
@@ -642,7 +642,7 @@ What we hand you is a `Result` with a list of entities, since that is the most
 a `RemoteData.fromResult` if you like.
 
 -}
-select : BackendUrl -> EndPoint error params key value c -> params -> CrudRequest error (List ( key, value ))
+select : BackendUrl -> EndPoint error key value c params -> params -> CrudRequest error (List ( key, value ))
 select backendUrl ((EndPoint endpoint) as ep) params =
     HttpBuilder.get (backendUrl </> endpoint.path)
         |> withQueryParams (endpoint.encodeParams params)
@@ -657,7 +657,7 @@ essentially succeeded ... it's just that there was no result. To do that, you
 can use `toTask404` or `toCmd404` with the resulting `CrudRequest`.
 
 -}
-get : BackendUrl -> EndPoint error p key value c -> key -> CrudRequest error ( key, value )
+get : BackendUrl -> EndPoint error key value c p -> key -> CrudRequest error ( key, value )
 get backendUrl ((EndPoint endpoint) as ep) key =
     urlForKey backendUrl ep key
         |> HttpBuilder.get
@@ -667,7 +667,7 @@ get backendUrl ((EndPoint endpoint) as ep) key =
 
 {-| Sends a `POST` request to create the specified value.
 -}
-post : BackendUrl -> EndPoint error p key value c -> value -> CrudRequest error ( key, value )
+post : BackendUrl -> EndPoint error key value c p -> value -> CrudRequest error ( key, value )
 post backendUrl ((EndPoint endpoint) as ep) value =
     (backendUrl </> endpoint.path)
         |> HttpBuilder.post
@@ -682,7 +682,7 @@ Assumes that the backend will respond with the full value. If that's not true, y
 can use `put_` instead.
 
 -}
-put : BackendUrl -> EndPoint error p key value c -> key -> value -> CrudRequest error value
+put : BackendUrl -> EndPoint error key value c p -> key -> value -> CrudRequest error value
 put backendUrl ((EndPoint endpoint) as ep) key value =
     urlForKey backendUrl ep key
         |> HttpBuilder.put
@@ -693,7 +693,7 @@ put backendUrl ((EndPoint endpoint) as ep) key value =
 
 {-| Like `put`, but ignores any value sent by the backend back ... just interprets errors.
 -}
-put_ : BackendUrl -> EndPoint error p key value c -> key -> value -> CrudRequest error ()
+put_ : BackendUrl -> EndPoint error key value c p -> key -> value -> CrudRequest error ()
 put_ backendUrl ((EndPoint endpoint) as ep) key value =
     urlForKey backendUrl ep key
         |> HttpBuilder.put
@@ -712,7 +712,7 @@ This function assumes that the backend will send the full value back. If it won'
 you can use `patch_` instead.
 
 -}
-patch : BackendUrl -> EndPoint error p key value c -> key -> Value -> CrudRequest error value
+patch : BackendUrl -> EndPoint error key value c p -> key -> Value -> CrudRequest error value
 patch backendUrl ((EndPoint endpoint) as ep) key value =
     urlForKey backendUrl ep key
         |> HttpBuilder.patch
@@ -723,7 +723,7 @@ patch backendUrl ((EndPoint endpoint) as ep) key value =
 
 {-| Like `patch`, but doesn't try to decode the response ... just reports errors.
 -}
-patch_ : BackendUrl -> EndPoint error p key v c -> key -> Value -> CrudRequest error ()
+patch_ : BackendUrl -> EndPoint error key v c p -> key -> Value -> CrudRequest error ()
 patch_ backendUrl ((EndPoint endpoint) as ep) key value =
     urlForKey backendUrl ep key
         |> HttpBuilder.patch
@@ -737,7 +737,7 @@ If you want to treat a 404 result as a success, use `toTask404` or `toCmd404`
 on the resulting `CrudRequest`.
 
 -}
-delete : BackendUrl -> EndPoint error p key v c -> key -> CrudRequest error ()
+delete : BackendUrl -> EndPoint error key v c p -> key -> CrudRequest error ()
 delete backendUrl ((EndPoint endpoint) as ep) key =
     urlForKey backendUrl ep key
         |> HttpBuilder.delete
@@ -860,6 +860,6 @@ encodeEntityUuid =
     Json.Encode.string << fromEntityUuid
 
 
-urlForKey : BackendUrl -> EndPoint error params key value created -> key -> String
+urlForKey : BackendUrl -> EndPoint e key v c p -> key -> String
 urlForKey backendUrl (EndPoint endpoint) key =
     backendUrl </> endpoint.path </> endpoint.keyToUrlPart key
