@@ -8,6 +8,8 @@ module Restful.Endpoint
         , EndPoint
         , EntityId
         , EntityUuid
+        , Offset
+        , Range
         , TokenStrategy
         , backend
         , decodeEntityId
@@ -28,26 +30,29 @@ module Restful.Endpoint
         , put
         , put_
         , select
+        , selectRange
         , toCmd
         , toCmd404
         , toEntityId
         , toEntityUuid
-        , tokenHeader
-        , tokenUrlParam
         , toTask
         , toTask404
+        , tokenHeader
+        , tokenUrlParam
         , withAccessToken
         , withBackend
-        , withDrupalResponses
-        , withPlainResponses
-        , withResponses
         , withCountDecoder
         , withCreatedType
         , withDrupalCountDecoder
+        , withDrupalResponses
         , withErrorType
+        , withItems
         , withKeyType
+        , withOffsetParam
         , withParamsType
         , withPath
+        , withPlainResponses
+        , withRangeParam
         , withTokenStrategy
         , withValueType
         )
@@ -59,8 +64,9 @@ backend entities exposed through a Restful HTTP API.
 ## Backends
 
 @docs Backend, backend, drupalBackend
-@docs withResponses, withDrupalResponses, withPlainResponses
+@docs withItems, withDrupalResponses, withPlainResponses
 @docs withCountDecoder, withDrupalCountDecoder
+@docs withOffsetParam, withRangeParam
 
 
 ## Endpoints
@@ -76,8 +82,8 @@ backend entities exposed through a Restful HTTP API.
 
 ## CRUD Operations
 
-@docs BackendUrl
-@docs get, select, patch, patch_, post, put, put_, delete
+@docs BackendUrl, Offset, Range
+@docs get, select, selectRange, patch, patch_, post, put, put_, delete
 
 
 # Requests
@@ -172,26 +178,30 @@ type EndPoint error key value created params
         , encodeValue : value -> Value
         , keyToUrlPart : key -> String
         , mapError : Error -> error
+        , offsetParam : String
         , path : String
+        , rangeParam : String
         , tokenStrategy : TokenStrategy
         }
 
 
 {-| Common configuration for endpoints connected to a particular backend.
 
-You might wonder why the `BackendUrl` could not be specified here, rather than
-asking for it with each CRUD request. The reason is that, in our setups, the
-`BackendUrl` is typically provided a run-time, whereas the rest of the
-information needed to construct the `Backend` or an `EndPoint` is known at
-compile-time. So, it's convenient to construct the `Backend` and
-`EndPoint` values statically, without requiring parameters.
+You might wonder why the `BackendUrl` could not be specified as part of the
+`Backend`, rather than asking for it with each CRUD request. The reason is
+that, in our setups, the `BackendUrl` is typically provided a run-time,
+whereas the rest of the information needed to construct the `Backend` or an
+`EndPoint` is known at compile-time. So, it's convenient to construct the
+`Backend` and `EndPoint` values statically, without requiring parameters.
 
 -}
 type Backend a
     = Backend
         { decodeCount : Decoder Int
-        , decodeSingleItem : Decoder a -> Decoder a
         , decodeMultipleItems : Decoder a -> Decoder (List a)
+        , decodeSingleItem : Decoder a -> Decoder a
+        , offsetParam : String
+        , rangeParam : String
         }
 
 
@@ -203,6 +213,8 @@ backend =
         { decodeSingleItem = identity
         , decodeMultipleItems = JD.list
         , decodeCount = decodeDrupalCount
+        , offsetParam = "offset"
+        , rangeParam = "range"
         }
 
 
@@ -218,7 +230,8 @@ drupalBackend =
     withDrupalResponses backend
 
 
-{-| Specify how to unwrap responses produced by the backend.
+{-| Specify how to unwrap items sent by the backend, before applying the
+decoders for the `key` and `value`.
 
   - The first parameter is used for functions like `get`, which return only one
     value. So, the question is: given what the backend sends, what do we need to
@@ -238,8 +251,8 @@ drupalBackend =
 For a pre-built version that handles how Drupal sends responses, see `withDrupalResponses`.
 
 -}
-withResponses : (Decoder a -> Decoder a) -> (Decoder a -> Decoder (List a)) -> Backend b -> Backend a
-withResponses decodeSingleItem decodeMultipleItems (Backend backend) =
+withItems : (Decoder a -> Decoder a) -> (Decoder a -> Decoder (List a)) -> Backend b -> Backend a
+withItems decodeSingleItem decodeMultipleItems (Backend backend) =
     Backend
         { backend
             | decodeSingleItem = decodeSingleItem
@@ -256,14 +269,14 @@ withResponses decodeSingleItem decodeMultipleItems (Backend backend) =
 
 So, this is equivalent to something like:
 
-    withResponses
+    withItems
         (field "data" << index 0)
         (field "data" << list)
 
 -}
 withDrupalResponses : Backend a -> Backend b
 withDrupalResponses =
-    withResponses decodeDrupalSingle decodeDrupalList
+    withItems decodeDrupalSingle decodeDrupalList
 
 
 {-| Unwrap responses in the simplest possible way:
@@ -275,12 +288,12 @@ withDrupalResponses =
 
 So, this is equivalent to:
 
-    withResponses identity Json.Decode.list
+    withItems identity Json.Decode.list
 
 -}
 withPlainResponses : Backend a -> Backend b
 withPlainResponses =
-    withResponses identity list
+    withItems identity list
 
 
 {-| Given the JSON your backend returns for queries, how can we decode the
@@ -299,6 +312,20 @@ withDrupalCountDecoder =
     withCountDecoder decodeDrupalCount
 
 
+{-| What is the name of the query parameter this backend uses to specify an offset for queries?
+-}
+withOffsetParam : String -> Backend a -> Backend a
+withOffsetParam offsetParam (Backend backend) =
+    Backend { backend | offsetParam = offsetParam }
+
+
+{-| What is the name of the query parameter this backend uses to specify how many items you want at once?
+-}
+withRangeParam : String -> Backend a -> Backend a
+withRangeParam rangeParam (Backend backend) =
+    Backend { backend | rangeParam = rangeParam }
+
+
 {-| Use the supplied backend with the endpoint.
 -}
 withBackend : Backend ( k, v ) -> EndPoint e k v c p -> EndPoint e k v c p
@@ -308,6 +335,8 @@ withBackend (Backend backend) (EndPoint endpoint) =
             | decodeCount = backend.decodeCount
             , decodeSingleItem = backend.decodeSingleItem
             , decodeMultipleItems = backend.decodeMultipleItems
+            , offsetParam = backend.offsetParam
+            , rangeParam = backend.rangeParam
         }
 
 
@@ -440,9 +469,6 @@ Yes, just three parameters! We'll supplement that with various Drupal-oriented d
   - You're not using a custom error type.
     But you can change that using `withErrorType`.
 
-  - An access token, if provided, will be sent as a URL param named "access_token".
-    But you can change that with `withTokenStrategy`.
-
 -}
 drupalEndpoint : String -> Decoder value -> (value -> Value) -> EndPoint Error (EntityId a) value value p
 drupalEndpoint path decodeValue encodeValue =
@@ -457,7 +483,9 @@ drupalEndpoint path decodeValue encodeValue =
         , encodeValue = encodeValue
         , keyToUrlPart = fromEntityId >> toString
         , mapError = identity
+        , offsetParam = "offset"
         , path = path
+        , rangeParam = "range"
         , tokenStrategy = TokenUrlParam "access_token"
         }
 
@@ -484,7 +512,9 @@ endpoint path decodeValue encodeValue =
         , encodeValue = encodeValue
         , keyToUrlPart = toString
         , mapError = identity
+        , offsetParam = "offset"
         , path = path
+        , rangeParam = "range"
         , tokenStrategy = TokenUrlParam "access_token"
         }
 
@@ -542,9 +572,9 @@ decodeItemList (EndPoint endpoint) =
         |> endpoint.decodeMultipleItems
 
 
-expectMultiple : EndPoint e key value c params -> params -> RequestBuilder a -> RequestBuilder (QueryResult key value params)
-expectMultiple ((EndPoint endpoint) as ep) params =
-    JD.map2 (QueryResult params 0) (decodeItemList ep) endpoint.decodeCount
+expectMultiple : EndPoint e key value c params -> params -> Int -> RequestBuilder a -> RequestBuilder (QueryResult key value params)
+expectMultiple ((EndPoint endpoint) as ep) params offset =
+    JD.map2 (QueryResult params offset) (decodeItemList ep) endpoint.decodeCount
         |> expectJson
         |> withExpect
 
@@ -684,17 +714,56 @@ type alias QueryResult key value params =
 
 
 {-| Select entities from an endpoint.
-
-What we hand you is a `Result` with a list of entities, since that is the most
-"natural" thing to hand back. You can convert it to a `RemoteData` easily with
-a `RemoteData.fromResult` if you like.
-
 -}
 select : BackendUrl -> EndPoint error key value c params -> params -> CrudRequest error (QueryResult key value params)
 select backendUrl ((EndPoint endpoint) as ep) params =
     HttpBuilder.get (backendUrl </> endpoint.path)
         |> withQueryParams (endpoint.encodeParams params)
-        |> expectMultiple ep params
+        |> expectMultiple ep params 0
+        |> CrudRequest endpoint.mapError endpoint.tokenStrategy
+
+
+{-| A zero-based offset that you would like the backend to start from.
+-}
+type alias Offset =
+    Int
+
+
+{-| How many items would you like the backend to return?
+-}
+type alias Range =
+    Int
+
+
+withOffsetAndRange : EndPoint e k v c p -> Offset -> Maybe Range -> RequestBuilder a -> RequestBuilder a
+withOffsetAndRange (EndPoint endpoint) offset range =
+    let
+        offsetParam =
+            if offset == 0 then
+                Nothing
+            else
+                Just ( endpoint.offsetParam, toString offset )
+
+        rangeParam =
+            Maybe.map (\r -> ( endpoint.rangeParam, toString r )) range
+    in
+        [ offsetParam, rangeParam ]
+            |> List.filterMap identity
+            |> withQueryParams
+
+
+{-| Like `select`, but you specify an offset and the number of items you want to fetch at once.
+
+If you don't supply the range, we'll start at the offset, but not specify any particular number
+of items to fetch.
+
+-}
+selectRange : BackendUrl -> EndPoint error key value c params -> params -> Offset -> Maybe Range -> CrudRequest error (QueryResult key value params)
+selectRange backendUrl ((EndPoint endpoint) as ep) params offset range =
+    HttpBuilder.get (backendUrl </> endpoint.path)
+        |> withQueryParams (endpoint.encodeParams params)
+        |> withOffsetAndRange ep offset range
+        |> expectMultiple ep params offset
         |> CrudRequest endpoint.mapError endpoint.tokenStrategy
 
 
