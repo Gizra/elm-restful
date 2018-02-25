@@ -792,12 +792,12 @@ get backendUrl ((EndPoint endpoint) as ep) key =
 
 {-| Sends a `POST` request to create the specified value.
 -}
-post : BackendUrl -> EndPoint error key value c p -> value -> CrudRequest error ( key, value )
-post backendUrl ((EndPoint endpoint) as ep) value =
+post : BackendUrl -> EndPoint error key value created p -> created -> CrudRequest error ( key, value )
+post backendUrl ((EndPoint endpoint) as ep) created =
     (backendUrl </> endpoint.path)
         |> HttpBuilder.post
         |> expectSingle ep
-        |> withJsonBody (endpoint.encodeValue value)
+        |> withJsonBody (endpoint.encodeCreatedValue created)
         |> CrudRequest endpoint.mapError endpoint.tokenStrategy
 
 
