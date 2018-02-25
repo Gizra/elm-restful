@@ -101,7 +101,7 @@ backend entities exposed through a Restful HTTP API.
 import Gizra.Json exposing (decodeInt)
 import Http exposing (Error(..), expectJson)
 import HttpBuilder exposing (..)
-import Json.Decode exposing (Decoder, field, index, list, map, map2, succeed)
+import Json.Decode as JD exposing (Decoder, field, index, list)
 import Json.Encode exposing (Value)
 import Task exposing (Task)
 
@@ -196,7 +196,7 @@ backend : Backend a
 backend =
     Backend
         { decodeSingle = identity
-        , decodeMultiple = Json.Decode.list
+        , decodeMultiple = JD.list
         }
 
 
@@ -506,17 +506,25 @@ tokenUrlParam =
             left ++ right
 
 
-expectMultiple : EndPoint e key value c p -> RequestBuilder a -> RequestBuilder (List ( key, value ))
-expectMultiple (EndPoint endpoint) =
-    map2 (,) endpoint.decodeKey endpoint.decodeValue
+expectMultiple : EndPoint e key value c params -> params -> RequestBuilder a -> RequestBuilder (QueryResult key value params)
+expectMultiple (EndPoint endpoint) params =
+    JD.map2 (,) endpoint.decodeKey endpoint.decodeValue
         |> endpoint.decodeMultiple
+        |> JD.map
+            (\items ->
+                { items = items
+                , offset = 0
+                , params = params
+                , count = List.length items
+                }
+            )
         |> expectJson
         |> withExpect
 
 
 expectSingle : EndPoint e key value c p -> RequestBuilder a -> RequestBuilder ( key, value )
 expectSingle (EndPoint endpoint) =
-    map2 (,) endpoint.decodeKey endpoint.decodeValue
+    JD.map2 (,) endpoint.decodeKey endpoint.decodeValue
         |> endpoint.decodeSingle
         |> expectJson
         |> withExpect
@@ -530,9 +538,9 @@ actually know the key!
 -}
 expectSingleWithKey : EndPoint e key value c p -> key -> RequestBuilder a -> RequestBuilder value
 expectSingleWithKey (EndPoint endpoint) key =
-    map2 (,) (succeed key) endpoint.decodeValue
+    JD.map2 (,) (JD.succeed key) endpoint.decodeValue
         |> endpoint.decodeSingle
-        |> map Tuple.second
+        |> JD.map Tuple.second
         |> expectJson
         |> withExpect
 
@@ -635,6 +643,19 @@ toTask404 (CrudRequest mapError _ builder) =
             )
 
 
+{-| When we're querying the backend, our result consists of a list of items,
+the count of how many items there are on the backend, and the offset on the
+backend that our list starts at. We also remember what params we supplied,
+since that will affect the meaning of the total and the offset.
+-}
+type alias QueryResult key value params =
+    { items : List ( key, value )
+    , params : params
+    , offset : Int
+    , count : Int
+    }
+
+
 {-| Select entities from an endpoint.
 
 What we hand you is a `Result` with a list of entities, since that is the most
@@ -642,11 +663,11 @@ What we hand you is a `Result` with a list of entities, since that is the most
 a `RemoteData.fromResult` if you like.
 
 -}
-select : BackendUrl -> EndPoint error key value c params -> params -> CrudRequest error (List ( key, value ))
+select : BackendUrl -> EndPoint error key value c params -> params -> CrudRequest error (QueryResult key value params)
 select backendUrl ((EndPoint endpoint) as ep) params =
     HttpBuilder.get (backendUrl </> endpoint.path)
         |> withQueryParams (endpoint.encodeParams params)
-        |> expectMultiple ep
+        |> expectMultiple ep params
         |> CrudRequest endpoint.mapError endpoint.tokenStrategy
 
 
@@ -746,7 +767,7 @@ delete backendUrl ((EndPoint endpoint) as ep) key =
 
 decodeDrupalId : (Int -> a) -> Decoder a
 decodeDrupalId wrapper =
-    map wrapper (field "id" decodeInt)
+    JD.map wrapper (field "id" decodeInt)
 
 
 decodeDrupalData : Decoder a -> Decoder a
@@ -809,7 +830,7 @@ is correct yourself.
 -}
 decodeEntityId : Decoder (EntityId a)
 decodeEntityId =
-    Json.Decode.map toEntityId decodeInt
+    JD.map toEntityId decodeInt
 
 
 {-| Encodes any kind of `EntityId` as a JSON int.
@@ -850,7 +871,7 @@ fromEntityUuid (EntityUuid a) =
 -}
 decodeEntityUuid : Decoder (EntityUuid a)
 decodeEntityUuid =
-    Json.Decode.map toEntityUuid Json.Decode.string
+    JD.map toEntityUuid JD.string
 
 
 {-| Encodes any kind of `EntityUuid` as a JSON string.
