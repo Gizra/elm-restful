@@ -35,6 +35,7 @@ module Restful.Endpoint
         , tokenUrlParam
         , toTask
         , toTask404
+        , withAccessToken
         , withBackend
         , withDrupalResponses
         , withPlainResponses
@@ -77,7 +78,7 @@ backend entities exposed through a Restful HTTP API.
 
 # Requests
 
-@docs CrudRequest, toTask, toTask404, toCmd, toCmd404
+@docs CrudRequest, withAccessToken, toTask, toTask404, toCmd, toCmd404
 
 
 ## EntityId
@@ -504,21 +505,6 @@ tokenUrlParam =
             left ++ right
 
 
-withAccessToken : TokenStrategy -> Maybe AccessToken -> RequestBuilder a -> RequestBuilder a
-withAccessToken strategy maybeToken builder =
-    case maybeToken of
-        Just token ->
-            case strategy of
-                TokenHeader header ->
-                    withHeader header token builder
-
-                TokenUrlParam param ->
-                    withQueryParams [ ( param, token ) ] builder
-
-        Nothing ->
-            builder
-
-
 expectMultiple : EndPoint e p key value c -> RequestBuilder a -> RequestBuilder (List ( key, value ))
 expectMultiple (EndPoint endpoint) =
     map2 (,) endpoint.decodeKey endpoint.decodeValue
@@ -560,7 +546,23 @@ request succeeds.
 
 -}
 type CrudRequest err ok
-    = CrudRequest (Error -> err) (RequestBuilder ok)
+    = CrudRequest (Error -> err) TokenStrategy (RequestBuilder ok)
+
+
+{-| Supply an `AccessToken` to be used with the request.
+-}
+withAccessToken : AccessToken -> CrudRequest err ok -> CrudRequest err ok
+withAccessToken token (CrudRequest mapError strategy builder) =
+    let
+        func =
+            case strategy of
+                TokenHeader header ->
+                    withHeader header token
+
+                TokenUrlParam param ->
+                    withQueryParams [ ( param, token ) ]
+    in
+        CrudRequest mapError strategy (func builder)
 
 
 {-| Convert a `CrudRequest` into a `Cmd`. You provide a tagger which indicates
@@ -590,7 +592,7 @@ If you'd prefer to go directly to a `Cmd`, see `toCmd`.
 
 -}
 toTask : CrudRequest err ok -> Task err ok
-toTask (CrudRequest mapError builder) =
+toTask (CrudRequest mapError _ builder) =
     HttpBuilder.toTask builder
         |> Task.mapError mapError
 
@@ -601,7 +603,7 @@ success type is now wrapped in a `Maybe`. Other errors are still treated as an
 error.
 -}
 toTask404 : CrudRequest err ok -> Task err (Maybe ok)
-toTask404 (CrudRequest mapError builder) =
+toTask404 (CrudRequest mapError _ builder) =
     HttpBuilder.toTask builder
         |> Task.map Just
         |> Task.onError
@@ -625,13 +627,12 @@ What we hand you is a `Result` with a list of entities, since that is the most
 a `RemoteData.fromResult` if you like.
 
 -}
-select : BackendUrl -> Maybe AccessToken -> EndPoint error params key value created -> params -> CrudRequest error (List ( key, value ))
-select backendUrl accessToken ((EndPoint endpoint) as ep) params =
+select : BackendUrl -> EndPoint error params key value created -> params -> CrudRequest error (List ( key, value ))
+select backendUrl ((EndPoint endpoint) as ep) params =
     HttpBuilder.get (backendUrl </> endpoint.path)
         |> withQueryParams (endpoint.encodeParams params)
-        |> withAccessToken endpoint.tokenStrategy accessToken
         |> expectMultiple ep
-        |> CrudRequest endpoint.mapError
+        |> CrudRequest endpoint.mapError endpoint.tokenStrategy
 
 
 {-| Gets a entity from the backend via its `key`.
@@ -641,25 +642,23 @@ essentially succeeded ... it's just that there was no result. To do that, you
 can use `toTask404` or `toCmd404` with the resulting `CrudRequest`.
 
 -}
-get : BackendUrl -> Maybe AccessToken -> EndPoint error params key value created -> key -> CrudRequest error ( key, value )
-get backendUrl accessToken ((EndPoint endpoint) as ep) key =
+get : BackendUrl -> EndPoint error params key value created -> key -> CrudRequest error ( key, value )
+get backendUrl ((EndPoint endpoint) as ep) key =
     urlForKey backendUrl ep key
         |> HttpBuilder.get
-        |> withAccessToken endpoint.tokenStrategy accessToken
         |> expectSingle ep
-        |> CrudRequest endpoint.mapError
+        |> CrudRequest endpoint.mapError endpoint.tokenStrategy
 
 
 {-| Sends a `POST` request to create the specified value.
 -}
-post : BackendUrl -> Maybe AccessToken -> EndPoint error params key value created -> value -> CrudRequest error ( key, value )
-post backendUrl accessToken ((EndPoint endpoint) as ep) value =
+post : BackendUrl -> EndPoint error params key value created -> value -> CrudRequest error ( key, value )
+post backendUrl ((EndPoint endpoint) as ep) value =
     (backendUrl </> endpoint.path)
         |> HttpBuilder.post
-        |> withAccessToken endpoint.tokenStrategy accessToken
         |> expectSingle ep
         |> withJsonBody (endpoint.encodeValue value)
-        |> CrudRequest endpoint.mapError
+        |> CrudRequest endpoint.mapError endpoint.tokenStrategy
 
 
 {-| Sends a `PUT` request to create the specified value.
@@ -668,25 +667,23 @@ Assumes that the backend will respond with the full value. If that's not true, y
 can use `put_` instead.
 
 -}
-put : BackendUrl -> Maybe AccessToken -> EndPoint error params key value created -> key -> value -> CrudRequest error value
-put backendUrl accessToken ((EndPoint endpoint) as ep) key value =
+put : BackendUrl -> EndPoint error params key value created -> key -> value -> CrudRequest error value
+put backendUrl ((EndPoint endpoint) as ep) key value =
     urlForKey backendUrl ep key
         |> HttpBuilder.put
-        |> withAccessToken endpoint.tokenStrategy accessToken
         |> expectSingleWithKey ep key
         |> withJsonBody (endpoint.encodeValue value)
-        |> CrudRequest endpoint.mapError
+        |> CrudRequest endpoint.mapError endpoint.tokenStrategy
 
 
 {-| Like `put`, but ignores any value sent by the backend back ... just interprets errors.
 -}
-put_ : BackendUrl -> Maybe AccessToken -> EndPoint error params key value created -> key -> value -> CrudRequest error ()
-put_ backendUrl accessToken ((EndPoint endpoint) as ep) key value =
+put_ : BackendUrl -> EndPoint error params key value created -> key -> value -> CrudRequest error ()
+put_ backendUrl ((EndPoint endpoint) as ep) key value =
     urlForKey backendUrl ep key
         |> HttpBuilder.put
-        |> withAccessToken endpoint.tokenStrategy accessToken
         |> withJsonBody (endpoint.encodeValue value)
-        |> CrudRequest endpoint.mapError
+        |> CrudRequest endpoint.mapError endpoint.tokenStrategy
 
 
 {-| Sends a `PATCH` request for the specified key and value.
@@ -700,35 +697,32 @@ This function assumes that the backend will send the full value back. If it won'
 you can use `patch_` instead.
 
 -}
-patch : BackendUrl -> Maybe AccessToken -> EndPoint error params key value created -> key -> Value -> CrudRequest error value
-patch backendUrl accessToken ((EndPoint endpoint) as ep) key value =
+patch : BackendUrl -> EndPoint error params key value created -> key -> Value -> CrudRequest error value
+patch backendUrl ((EndPoint endpoint) as ep) key value =
     urlForKey backendUrl ep key
         |> HttpBuilder.patch
-        |> withAccessToken endpoint.tokenStrategy accessToken
         |> expectSingleWithKey ep key
         |> withJsonBody value
-        |> CrudRequest endpoint.mapError
+        |> CrudRequest endpoint.mapError endpoint.tokenStrategy
 
 
 {-| Like `patch`, but doesn't try to decode the response ... just reports errors.
 -}
-patch_ : BackendUrl -> Maybe AccessToken -> EndPoint error params key value created -> key -> Value -> CrudRequest error ()
-patch_ backendUrl accessToken ((EndPoint endpoint) as ep) key value =
+patch_ : BackendUrl -> EndPoint error params key value created -> key -> Value -> CrudRequest error ()
+patch_ backendUrl ((EndPoint endpoint) as ep) key value =
     urlForKey backendUrl ep key
         |> HttpBuilder.patch
-        |> withAccessToken endpoint.tokenStrategy accessToken
         |> withJsonBody value
-        |> CrudRequest endpoint.mapError
+        |> CrudRequest endpoint.mapError endpoint.tokenStrategy
 
 
 {-| Delete entity.
 -}
-delete : BackendUrl -> Maybe AccessToken -> EndPoint error params key value created -> key -> CrudRequest error ()
-delete backendUrl accessToken ((EndPoint endpoint) as ep) key =
+delete : BackendUrl -> EndPoint error params key value created -> key -> CrudRequest error ()
+delete backendUrl ((EndPoint endpoint) as ep) key =
     urlForKey backendUrl ep key
         |> HttpBuilder.delete
-        |> withAccessToken endpoint.tokenStrategy accessToken
-        |> CrudRequest endpoint.mapError
+        |> CrudRequest endpoint.mapError endpoint.tokenStrategy
 
 
 decodeDrupalId : (Int -> a) -> Decoder a
