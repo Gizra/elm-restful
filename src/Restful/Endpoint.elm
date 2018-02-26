@@ -26,10 +26,8 @@ module Restful.Endpoint
         , get
         , modifyRequest
         , patch
-        , patch_
         , post
         , put
-        , put_
         , select
         , selectRange
         , toCmd
@@ -56,6 +54,7 @@ module Restful.Endpoint
         , withRangeParam
         , withTokenStrategy
         , withValueType
+        , withoutDecoder
         )
 
 {-| These functions and types are intended to facilitate CRUD operations upon
@@ -85,12 +84,12 @@ backend entities exposed through a Restful HTTP API.
 ## CRUD Operations
 
 @docs BackendUrl, Offset, Range
-@docs get, select, selectRange, patch, patch_, post, put, put_, delete
+@docs get, select, selectRange, patch, post, put, delete
 
 
 # Requests
 
-@docs CrudRequest, withAccessToken, modifyRequest, toTask, toTask404, toCmd, toCmd404
+@docs CrudRequest, withAccessToken, withoutDecoder, modifyRequest, toTask, toTask404, toCmd, toCmd404
 
 
 ## EntityId
@@ -654,6 +653,18 @@ modifyRequest func (CrudRequest mapError strategy builder) =
     CrudRequest mapError strategy (func builder)
 
 
+{-| Sometimes we want to send a request, but we're not interested in the
+response, just whether there was an error. In that case, you can use
+`withoutDecoder` to omit parsing the response.
+-}
+withoutDecoder : CrudRequest e a -> CrudRequest e ()
+withoutDecoder =
+    JD.succeed ()
+        |> expectJson
+        |> withExpect
+        |> modifyRequest
+
+
 {-| Convert a `CrudRequest` into a `Cmd`. You provide a tagger which indicates
 which `Msg` should handle the result.
 
@@ -804,8 +815,8 @@ post backendUrl ((EndPoint endpoint) as ep) created =
 
 {-| Sends a `PUT` request to create the specified value.
 
-Assumes that the backend will respond with the full value. If that's not true, you
-can use `put_` instead.
+If you want to ignore the JSON the server sends back for the value, you
+can apply `withoutDecoder` to the result.
 
 -}
 put : BackendUrl -> EndPoint error key value c p -> key -> value -> CrudRequest error value
@@ -817,16 +828,6 @@ put backendUrl ((EndPoint endpoint) as ep) key value =
         |> CrudRequest endpoint.mapError endpoint.tokenStrategy
 
 
-{-| Like `put`, but ignores any value sent by the backend back ... just interprets errors.
--}
-put_ : BackendUrl -> EndPoint error key value c p -> key -> value -> CrudRequest error ()
-put_ backendUrl ((EndPoint endpoint) as ep) key value =
-    urlForKey backendUrl ep key
-        |> HttpBuilder.put
-        |> withJsonBody (endpoint.encodeValue value)
-        |> CrudRequest endpoint.mapError endpoint.tokenStrategy
-
-
 {-| Sends a `PATCH` request for the specified key and value.
 
 Now, the point of a `PATCH` request is that you're not sending the **full** value,
@@ -834,8 +835,8 @@ but some subset. So, you supply your own JSON value, rather than using the one t
 the endpoint would create use for PUT or POST. (We could have a separate config for
 each kind of PATCH, which would contribute to type-safety, but is possibly overkill).
 
-This function assumes that the backend will send the full value back. If it won't, then
-you can use `patch_` instead.
+If you want to ignore the JSON the server sends back for the value, you
+can apply `withoutDecoder` to the result.
 
 -}
 patch : BackendUrl -> EndPoint error key value c p -> key -> Value -> CrudRequest error value
@@ -843,16 +844,6 @@ patch backendUrl ((EndPoint endpoint) as ep) key value =
     urlForKey backendUrl ep key
         |> HttpBuilder.patch
         |> expectSingleWithKey ep key
-        |> withJsonBody value
-        |> CrudRequest endpoint.mapError endpoint.tokenStrategy
-
-
-{-| Like `patch`, but doesn't try to decode the response ... just reports errors.
--}
-patch_ : BackendUrl -> EndPoint error key v c p -> key -> Value -> CrudRequest error ()
-patch_ backendUrl ((EndPoint endpoint) as ep) key value =
-    urlForKey backendUrl ep key
-        |> HttpBuilder.patch
         |> withJsonBody value
         |> CrudRequest endpoint.mapError endpoint.tokenStrategy
 
