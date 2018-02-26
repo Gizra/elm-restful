@@ -61,11 +61,11 @@ can be handled here.
 
 import Base64
 import Http exposing (Error(..), expectJson)
-import HttpBuilder exposing (withExpect, withHeader, withExpect, withQueryParams)
+import HttpBuilder exposing (withExpect, withHeader, withQueryParams)
 import Json.Decode exposing (Decoder, field)
 import Json.Encode exposing (Value)
-import RemoteData exposing (WebData, RemoteData(..))
-import Restful.Endpoint exposing (BackendUrl, AccessToken, (</>))
+import RemoteData exposing (RemoteData(..), WebData)
+import Restful.Endpoint exposing ((</>), AccessToken, BackendUrl)
 import Task
 
 
@@ -429,7 +429,7 @@ checkCachedCredentials config backendUrl value =
         ( loginStatus, cmd, _ ) =
             update config (CheckCachedCredentials backendUrl value) CheckingCachedCredentials
     in
-        ( loginStatus, cmd )
+    ( loginStatus, cmd )
 
 
 {-| Some static configuration which we need to integrate with your app.
@@ -664,10 +664,10 @@ update config msg model =
                         |> Task.andThen requestUser
                         |> Task.attempt HandleLoginAttempt
             in
-                ( setProgress TryingPassword model
-                , Cmd.map config.tag cmd
-                , False
-                )
+            ( setProgress TryingPassword model
+            , Cmd.map config.tag cmd
+            , False
+            )
 
         HandleAccessTokenCheck credentials result ->
             case result of
@@ -715,7 +715,7 @@ update config msg model =
                                 |> Task.attempt (HandleAccessTokenCheck credentials)
                                 |> Cmd.map config.tag
                     in
-                        ( CheckingCachedCredentials, cmd, False )
+                    ( CheckingCachedCredentials, cmd, False )
 
         Logout ->
             case model of
@@ -779,25 +779,25 @@ update config msg model =
                         _ ->
                             result
             in
-                case ( adjustedResult, model ) of
-                    ( Ok _, LoggedIn login ) ->
-                        -- We tell the app to cache credentials consisting of an empty object.
-                        -- This is simpler than telling the app to delete credentials.
-                        ( loggedOut
-                        , config.cacheCredentials login.credentials.backendUrl "{}"
-                        , False
-                        )
+            case ( adjustedResult, model ) of
+                ( Ok _, LoggedIn login ) ->
+                    -- We tell the app to cache credentials consisting of an empty object.
+                    -- This is simpler than telling the app to delete credentials.
+                    ( loggedOut
+                    , config.cacheCredentials login.credentials.backendUrl "{}"
+                    , False
+                    )
 
-                    ( Err err, LoggedIn login ) ->
-                        -- Just record the error
-                        ( LoggedIn { login | logout = Failure err }
-                        , Cmd.none
-                        , False
-                        )
+                ( Err err, LoggedIn login ) ->
+                    -- Just record the error
+                    ( LoggedIn { login | logout = Failure err }
+                    , Cmd.none
+                    , False
+                    )
 
-                    _ ->
-                        -- If we weren't logged in anyway, there's nothing to do.
-                        ( model, Cmd.none, False )
+                _ ->
+                    -- If we weren't logged in anyway, there's nothing to do.
+                    ( model, Cmd.none, False )
 
 
 encodeCredentials : Config user data msg -> Credentials user -> String

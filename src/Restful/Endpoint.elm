@@ -637,7 +637,7 @@ withAccessToken token ((CrudRequest _ strategy _) as req) =
                 TokenUrlParam param ->
                     withQueryParams [ ( param, token ) ]
     in
-        modifyRequest func req
+    modifyRequest func req
 
 
 {-| Despite all the fine work and careful thought which has gone into this
@@ -756,9 +756,9 @@ withOffsetAndRange (EndPoint endpoint) offset range =
         rangeParam =
             Maybe.map (\r -> ( endpoint.rangeParam, toString r )) range
     in
-        [ offsetParam, rangeParam ]
-            |> List.filterMap identity
-            |> withQueryParams
+    [ offsetParam, rangeParam ]
+        |> List.filterMap identity
+        |> withQueryParams
 
 
 {-| Like `select`, but you specify an offset and the number of items you want to fetch at once.
