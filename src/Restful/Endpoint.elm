@@ -783,11 +783,11 @@ essentially succeeded ... it's just that there was no result. To do that, you
 can use `toTask404` or `toCmd404` with the resulting `CrudRequest`.
 
 -}
-get : BackendUrl -> EndPoint error key value c p -> key -> CrudRequest error ( key, value )
+get : BackendUrl -> EndPoint error key value c p -> key -> CrudRequest error value
 get backendUrl ((EndPoint endpoint) as ep) key =
     urlForKey backendUrl ep key
         |> HttpBuilder.get
-        |> expectSingle ep
+        |> expectSingleWithKey ep key
         |> CrudRequest endpoint.mapError endpoint.tokenStrategy
 
 
