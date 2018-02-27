@@ -31,11 +31,11 @@ module Restful.Endpoint
         , select
         , selectRange
         , toCmd
-        , toCmd404
+        , toCmdMaybe
         , toEntityId
         , toEntityUuid
         , toTask
-        , toTask404
+        , toTaskMaybe
         , tokenHeader
         , tokenUrlParam
         , withAccessToken
@@ -89,7 +89,7 @@ backend entities exposed through a Restful HTTP API.
 
 # Requests
 
-@docs CrudRequest, withAccessToken, withoutDecoder, modifyRequest, toTask, toTask404, toCmd, toCmd404
+@docs CrudRequest, withAccessToken, withoutDecoder, modifyRequest, toTask, toTaskMaybe, toCmd, toCmdMaybe
 
 
 ## EntityId
@@ -681,9 +681,9 @@ an error, it is treating as a successful result, returning `Nothing`. So, the
 success type is now wrapped in a `Maybe`. Other errors are still treated as an
 error.
 -}
-toCmd404 : (Result err (Maybe ok) -> msg) -> CrudRequest err ok -> Cmd msg
-toCmd404 tagger request =
-    Task.attempt tagger (toTask404 request)
+toCmdMaybe : (Result err (Maybe ok) -> msg) -> CrudRequest err ok -> Cmd msg
+toCmdMaybe tagger request =
+    Task.attempt tagger (toTaskMaybe request)
 
 
 {-| Convert a `CrudRequest` into a `Task`.
@@ -702,8 +702,8 @@ an error, it is treating as a successful result, returning `Nothing`. So, the
 success type is now wrapped in a `Maybe`. Other errors are still treated as an
 error.
 -}
-toTask404 : CrudRequest err ok -> Task err (Maybe ok)
-toTask404 (CrudRequest mapError _ builder) =
+toTaskMaybe : CrudRequest err ok -> Task err (Maybe ok)
+toTaskMaybe (CrudRequest mapError _ builder) =
     HttpBuilder.toTask builder
         |> Task.map Just
         |> Task.onError
@@ -791,7 +791,7 @@ selectRange backendUrl ((EndPoint endpoint) as ep) params offset range =
 
 Sometimes you'd like to treat a 404 error specially, since the request
 essentially succeeded ... it's just that there was no result. To do that, you
-can use `toTask404` or `toCmd404` with the resulting `CrudRequest`.
+can use `toTaskMaybe` or `toCmdMaybe` with the resulting `CrudRequest`.
 
 -}
 get : BackendUrl -> EndPoint error key value c p -> key -> CrudRequest error value
@@ -850,7 +850,7 @@ patch backendUrl ((EndPoint endpoint) as ep) key value =
 
 {-| Delete entity.
 
-If you want to treat a 404 result as a success, use `toTask404` or `toCmd404`
+If you want to treat a 404 result as a success, use `toTaskMaybe` or `toCmdMaybe`
 on the resulting `CrudRequest`.
 
 -}
