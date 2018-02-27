@@ -24,6 +24,7 @@ module Restful.Endpoint
         , fromEntityId
         , fromEntityUuid
         , get
+        , getMany
         , modifyRequest
         , patch
         , post
@@ -47,6 +48,7 @@ module Restful.Endpoint
         , withErrorType
         , withItems
         , withKeyType
+        , withManyKeys
         , withOffsetParam
         , withParamsType
         , withPath
@@ -67,6 +69,7 @@ backend entities exposed through a Restful HTTP API.
 @docs withItems, withDrupalItems, withPlainItems
 @docs withCountDecoder, withDrupalCountDecoder
 @docs withOffsetParam, withRangeParam
+@docs withManyKeys
 @docs withTokenStrategy
 
 
@@ -84,7 +87,7 @@ backend entities exposed through a Restful HTTP API.
 ## CRUD Operations
 
 @docs BackendUrl, Offset, Range
-@docs get, select, selectRange, patch, post, put, delete
+@docs get, getMany, select, selectRange, patch, post, put, delete
 
 
 # Requests
@@ -178,6 +181,7 @@ type EndPoint error key value created params
         , encodeParams : params -> List ( String, String )
         , encodeValue : value -> Value
         , keyToUrlPart : key -> String
+        , manyKeys : List String -> String
         , mapError : Error -> error
         , offsetParam : String
         , path : String
@@ -201,6 +205,7 @@ type Backend a
         { decodeCount : Decoder Int
         , decodeMultipleItems : Decoder a -> Decoder (List a)
         , decodeSingleItem : Decoder a -> Decoder a
+        , manyKeys : List String -> String
         , offsetParam : String
         , rangeParam : String
         , tokenStrategy : TokenStrategy
@@ -215,6 +220,7 @@ backend =
         { decodeSingleItem = identity
         , decodeMultipleItems = JD.list
         , decodeCount = decodeDrupalCount
+        , manyKeys = String.join ","
         , offsetParam = "offset"
         , rangeParam = "range"
         , tokenStrategy = tokenUrlParam "access_token"
@@ -261,6 +267,18 @@ withItems decodeSingleItem decodeMultipleItems (Backend backend) =
             | decodeSingleItem = decodeSingleItem
             , decodeMultipleItems = decodeMultipleItems
         }
+
+
+{-| When doing a GET via `getMany`, for multiple keys, how do we combine the
+keys for the URL?
+
+By default, combines using `String.join ","` ... that is, by putting a comma
+between each key.
+
+-}
+withManyKeys : (List String -> String) -> Backend a -> Backend a
+withManyKeys manyKeys (Backend backend) =
+    Backend { backend | manyKeys = manyKeys }
 
 
 {-| Unwrap items the Drupal way.
@@ -352,6 +370,7 @@ withBackend (Backend backend) (EndPoint endpoint) =
             | decodeCount = backend.decodeCount
             , decodeSingleItem = backend.decodeSingleItem
             , decodeMultipleItems = backend.decodeMultipleItems
+            , manyKeys = backend.manyKeys
             , offsetParam = backend.offsetParam
             , rangeParam = backend.rangeParam
             , tokenStrategy = backend.tokenStrategy
@@ -490,6 +509,7 @@ drupalEndpoint path decodeValue encodeValue =
         , encodeParams = always []
         , encodeValue = encodeValue
         , keyToUrlPart = fromEntityId >> toString
+        , manyKeys = String.join ","
         , mapError = identity
         , offsetParam = "offset"
         , path = path
@@ -519,6 +539,7 @@ endpoint path decodeValue encodeValue =
         , encodeParams = always []
         , encodeValue = encodeValue
         , keyToUrlPart = toString
+        , manyKeys = String.join ","
         , mapError = identity
         , offsetParam = "offset"
         , path = path
@@ -578,6 +599,13 @@ decodeItemList : EndPoint e k v c p -> Decoder (List ( k, v ))
 decodeItemList (EndPoint endpoint) =
     JD.map2 (,) endpoint.decodeKey endpoint.decodeValue
         |> endpoint.decodeMultipleItems
+
+
+expectMany : EndPoint e key value c params -> RequestBuilder a -> RequestBuilder (List ( key, value ))
+expectMany ((EndPoint endpoint) as ep) =
+    decodeItemList ep
+        |> expectJson
+        |> withExpect
 
 
 expectMultiple : EndPoint e key value c params -> params -> Int -> RequestBuilder a -> RequestBuilder (QueryResult key value params)
@@ -802,6 +830,16 @@ get backendUrl ((EndPoint endpoint) as ep) key =
         |> CrudRequest endpoint.mapError endpoint.tokenStrategy
 
 
+{-| Gets several entities from the backend via multiple `key`s.
+-}
+getMany : BackendUrl -> EndPoint error key value c p -> List key -> CrudRequest error (List ( key, value ))
+getMany backendUrl ((EndPoint endpoint) as ep) keys =
+    urlForManyKeys backendUrl ep keys
+        |> HttpBuilder.get
+        |> expectMany ep
+        |> CrudRequest endpoint.mapError endpoint.tokenStrategy
+
+
 {-| Sends a `POST` request to create the specified value.
 -}
 post : BackendUrl -> EndPoint error key value created p -> created -> CrudRequest error ( key, value )
@@ -984,3 +1022,13 @@ encodeEntityUuid =
 urlForKey : BackendUrl -> EndPoint e key v c p -> key -> String
 urlForKey backendUrl (EndPoint endpoint) key =
     backendUrl </> endpoint.path </> endpoint.keyToUrlPart key
+
+
+urlForManyKeys : BackendUrl -> EndPoint e key v c p -> List key -> String
+urlForManyKeys backendUrl (EndPoint endpoint) keys =
+    let
+        ids =
+            List.map endpoint.keyToUrlPart keys
+                |> endpoint.manyKeys
+    in
+    backendUrl </> endpoint.path </> ids
