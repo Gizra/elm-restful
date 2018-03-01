@@ -4,6 +4,7 @@ module Restful.Endpoint
         , AccessToken
         , Backend
         , BackendUrl
+        , CrudOperations
         , CrudRequest
         , EndPoint
         , EntityId
@@ -15,6 +16,8 @@ module Restful.Endpoint
         , ReadWrite
         , ReadWriteEndPoint
         , TokenStrategy
+        , applyAccessToken
+        , applyBackendUrl
         , backend
         , decodeEntityId
         , decodeEntityUuid
@@ -96,6 +99,7 @@ backend entities exposed through a Restful HTTP API.
 
 @docs BackendUrl, Offset, Range
 @docs get, getMany, select, selectRange, patch, patchAny, patchFull, post, put, delete
+@docs CrudOperations, applyBackendUrl, applyAccessToken
 
 
 # Requests
@@ -961,6 +965,89 @@ decodeSingleDrupalEntity =
 decodeDrupalList : Decoder a -> Decoder (List a)
 decodeDrupalList =
     decodeDrupalData << list
+
+
+{-| A record with alll the functions for CRUD requests, with the `BackendUrl`
+partially applied (and, optionally, the `AccessToken`).
+
+So, at the top of an `update` function, you might do something like:
+
+    let
+        ops =
+            applyBackendUrl backendUrl
+                |> applyAccessToken accessToken
+
+Then, in the rest of the `update` function, you can say thtings like:
+
+    ops.select ...
+
+... without having to supply the `backendUrl` over and over, and without having
+to say `withAccessToken accessToken` each time.
+
+Or, your `update` function might just ask for a `CrudOperations` as a parameter,
+rather than asking for a `BackendUrl` or `AccessToken` at all.
+
+-}
+type alias CrudOperations w e k v c p =
+    { delete : EndPoint w e k v c p -> k -> CrudRequest e ()
+    , get : EndPoint w e k v c p -> k -> CrudRequest e v
+    , getMany : EndPoint w e k v c p -> List k -> CrudRequest e (List ( k, v ))
+    , patch : ReadWriteEndPoint e k v c p -> k -> v -> (v -> Value) -> CrudRequest e v
+    , patchAny : ReadWriteEndPoint e k v c p -> k -> Value -> CrudRequest e v
+    , patchFull : ReadWriteEndPoint e k v c p -> k -> v -> CrudRequest e v
+    , post : ReadWriteEndPoint e k v c p -> c -> CrudRequest e ( k, v )
+    , put : ReadWriteEndPoint e k v c p -> k -> v -> CrudRequest e v
+    , select : EndPoint w e k v c p -> p -> CrudRequest e (QueryResult k v p)
+    , selectRange : EndPoint w e k v c p -> p -> Offset -> Maybe Range -> CrudRequest e (QueryResult k v p)
+    }
+
+
+{-| Returns a `CrudOperations` record that has the `BackendUrl` applied to each function.
+-}
+applyBackendUrl : BackendUrl -> CrudOperations w e k v c p
+applyBackendUrl backendUrl =
+    { delete = delete backendUrl
+    , get = get backendUrl
+    , getMany = getMany backendUrl
+    , patch = patch backendUrl
+    , patchAny = patchAny backendUrl
+    , patchFull = patchFull backendUrl
+    , post = post backendUrl
+    , put = put backendUrl
+    , select = select backendUrl
+    , selectRange = selectRange backendUrl
+    }
+
+
+{-| Applies the given `AccessToken` to each of the functions, so you don't need
+to do it every time.
+-}
+applyAccessToken : AccessToken -> CrudOperations w e k v c p -> CrudOperations w e k v c p
+applyAccessToken accessToken ops =
+    let
+        addAccessToken =
+            withAccessToken accessToken
+
+        apply2 func =
+            \a -> func a >> addAccessToken
+
+        apply3 func =
+            \a b -> func a b >> addAccessToken
+
+        apply4 func =
+            \a b c -> func a b c >> addAccessToken
+    in
+    { delete = apply2 ops.delete
+    , get = apply2 ops.get
+    , getMany = apply2 ops.getMany
+    , patch = apply4 ops.patch
+    , patchAny = apply3 ops.patchAny
+    , patchFull = apply3 ops.patchFull
+    , post = apply2 ops.post
+    , put = apply3 ops.put
+    , select = apply2 ops.select
+    , selectRange = apply4 ops.selectRange
+    }
 
 
 {-| This is a wrapper for an `Int` id. It takes a "phantom" type variable
