@@ -31,6 +31,8 @@ module Restful.Endpoint
         , getMany
         , modifyRequest
         , patch
+        , patchAny
+        , patchFull
         , post
         , put
         , select
@@ -93,7 +95,7 @@ backend entities exposed through a Restful HTTP API.
 ## CRUD Operations
 
 @docs BackendUrl, Offset, Range
-@docs get, getMany, select, selectRange, patch, post, put, delete
+@docs get, getMany, select, selectRange, patch, patchAny, patchFull, post, put, delete
 
 
 # Requests
@@ -863,23 +865,64 @@ put backendUrl ((EndPoint endpoint) as ep) key value =
         |> CrudRequest endpoint.mapError endpoint.backend.tokenStrategy
 
 
-{-| Sends a `PATCH` request for the specified key and value.
+{-| Sends a `PATCH` request for the specified key and value, using the encoder
+you supply.
 
-Now, the point of a `PATCH` request is that you're not sending the **full** value,
-but some subset. So, you supply your own JSON value, rather than using the one that
-the endpoint would create use for PUT or POST. (We could have a separate config for
-each kind of PATCH, which would contribute to type-safety, but is possibly overkill).
+  - If you want to send a `PATCH` with your usual encoder, then you can use
+    `patchFull` insteed. (The result will be just like `put`, but it will use
+    a PATCH request instead of PUT).
+
+  - If you want to send an arbitrary JSON `Value` that doesn't depend on your
+    `value`, then you can use `patchAny`.
 
 If you want to ignore the JSON the server sends back for the value, you
 can apply `withoutDecoder` to the result.
 
 -}
-patch : BackendUrl -> ReadWriteEndPoint error key value c p -> key -> Value -> CrudRequest error value
-patch backendUrl ((EndPoint endpoint) as ep) key value =
+patch : BackendUrl -> ReadWriteEndPoint error key value c p -> key -> value -> (value -> Value) -> CrudRequest error value
+patch backendUrl endpoint key value encoder =
+    patchAny backendUrl endpoint key (encoder value)
+
+
+{-| Sends a `PATCH` request for the specified key and value, using the encoder
+defined for this endpoint. So, this is just like a `put`, except it uses an
+HTTP PATCH request.
+
+  - If you want to send a `PATCH` with just some fields, you can use `patch`
+    instead, and provide an alternate encoder for your `value`.
+
+  - If you want to send an arbitrary JSON `Value` that doesn't depend on your
+    `value`, then you can use `patchAny`.
+
+If you want to ignore the JSON the server sends back for the value, you
+can apply `withoutDecoder` to the result.
+
+-}
+patchFull : BackendUrl -> ReadWriteEndPoint error key value c p -> key -> value -> CrudRequest error value
+patchFull backendUrl ((EndPoint endpoint) as ep) key value =
+    patch backendUrl ep key value endpoint.encodeValue
+
+
+{-| Sends a `PATCH` request for the specified key, using an arbitrary JSON `Value`
+that you supply.
+
+  - If you have one of your `value` entities, and an encoder, you can use
+    `patch` instead.
+
+  - If you want to send a `PATCH` with your usual encoder, then you can use
+    `patchFull` insteed. (The result will be just like `put`, but it will use
+    a PATCH request instead of PUT).
+
+If you want to ignore the JSON the server sends back for the value, you
+can apply `withoutDecoder` to the result.
+
+-}
+patchAny : BackendUrl -> ReadWriteEndPoint error key value c p -> key -> Value -> CrudRequest error value
+patchAny backendUrl ((EndPoint endpoint) as ep) key json =
     urlForKey backendUrl ep key
         |> HttpBuilder.patch
         |> expectSingleWithKey ep key
-        |> withJsonBody value
+        |> withJsonBody json
         |> CrudRequest endpoint.mapError endpoint.backend.tokenStrategy
 
 
