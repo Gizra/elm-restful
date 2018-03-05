@@ -157,10 +157,8 @@ type ReadWrite
     = ReadWrite
 
 
-{-| This represents an idiom for dealing with Restful JSON endpoints.
-The basic idea is to include in the `EndPoint` type all those things about an
-endpoint which don't change. For instance, we know the path to the endpoint,
-what kind of JSON it emits, etc. -- that never varies.
+{-| The `EndPoint` type represents a Restful JSON endpoint, with at least
+a path for URLs, and a decoder for the JSON it emits.
 
 The structure is somewhat specialized for a headless Drupal backend using its
 Restful module. However, it should be adaptable for use in other REST
@@ -225,6 +223,9 @@ that, in our setups, the `BackendUrl` is typically provided a run-time,
 whereas the rest of the information needed to construct the `Backend` (or an
 `EndPoint`) is known at compile-time. So, it's convenient to construct the
 `Backend` and `EndPoint` values statically, without requiring parameters.
+
+You can pre-apply a `BackendUrl` (or `AccessToken`), once known, using
+`applyBackendUrl` and `applyAccessToken`.
 
 -}
 type Backend a
@@ -316,8 +317,8 @@ withItems decodeSingleItem decodeMultipleItems (Backend backend) =
 {-| When doing a GET via `getMany`, for multiple keys, how do we combine the
 keys for the URL?
 
-By default, combines using `String.join ","` ... that is, by putting a comma
-between each key.
+By default, an `endpoint` combines keys using `String.join ","` ... that is, by
+putting a comma between each key.
 
 -}
 withManyKeys : (List String -> String) -> Backend a -> Backend a
@@ -377,14 +378,22 @@ withDrupalCountDecoder =
     withCountDecoder decodeDrupalCount
 
 
-{-| What is the name of the query parameter this backend uses to specify an offset for queries?
+{-| What is the name of the query parameter this backend uses to specify an
+offset for queries?
+
+By default, we use "offset".
+
 -}
 withOffsetParam : String -> Backend a -> Backend a
 withOffsetParam offsetParam (Backend backend) =
     Backend { backend | offsetParam = offsetParam }
 
 
-{-| What is the name of the query parameter this backend uses to specify how many items you want at once?
+{-| What is the name of the query parameter this backend uses to specify how
+many items you want at once?
+
+By default, we use "range".
+
 -}
 withRangeParam : String -> Backend a -> Backend a
 withRangeParam rangeParam (Backend backend) =
@@ -393,7 +402,7 @@ withRangeParam rangeParam (Backend backend) =
 
 {-| Use the supplied token strategy for this backend.
 
-You can use `tokenHeader` or `tokenUrlParam` to construct a `TokenStrategy.
+You can use `tokenHeader` or `tokenUrlParam` to construct a `TokenStrategy`.
 
 -}
 withTokenStrategy : TokenStrategy -> Backend a -> Backend a
@@ -464,7 +473,8 @@ withCreatedEncoder encodeCreatedValue (EndPoint endpoint) =
     EndPoint { endpoint | encodeCreatedValue = encodeCreatedValue }
 
 
-{-| Use the supplied function to convert an `Http.Error` to your desired `error` type.
+{-| Use the supplied function to convert an `Http.Error` to your desired
+`error` type.
 
 By default, we use `identity` (that is, by default, our error type is
 `Http.Error`). However, you may have a way to turn that into a more
@@ -490,6 +500,7 @@ withPath path (EndPoint endpoint) =
 
   - The first parameter is the `path` to the endpoint (which will be appended to the
     `BackendUrl` you provide for requests).
+
   - The second parameter is a decoder for your `value` type.
 
 Yes, just two parameters! We'll supplement that with various Drupal-oriented defaults:
@@ -512,7 +523,8 @@ Yes, just two parameters! We'll supplement that with various Drupal-oriented def
 If you need a different `key` type, you can start with `endpoint` instead, and supply
 `drupalBackend` to it as a parameter to get the rest of the defaults.
 
-To turn this into a `ReadWriteEndpoint`, see `withValueEncoder`.
+This initially produces a `ReadOnlyEndPoint`. To obtain a `ReadWriteEndpoint`,
+apply `withValueEncoder` to the result.
 
 -}
 drupalEndpoint : String -> Decoder value -> ReadOnlyEndPoint Error (EntityId a) value p
@@ -525,11 +537,14 @@ drupalEndpoint path decodeValue =
 
   - The first parameter is the `path` to the endpoint (which will be appended
     to the `BackendUrl` you provide for requests).
+
   - The second parameter is a decoder for your `key` type.
+
   - The third parameter is a decoder for your `value` type.
+
   - The fourth parameter is your backend.
 
-To turn this into a `ReadWriteEndpoint`, see `withValueEncoder`.
+To turn this into a `ReadWriteEndpoint`, apply `withValueEncoder` to the result.
 
 -}
 endpoint : String -> Decoder key -> Decoder value -> Backend ( key, value ) -> ReadOnlyEndPoint Error key value p
@@ -859,6 +874,9 @@ post backendUrl ((EndPoint endpoint) as ep) created =
 If you want to ignore the JSON the server sends back for the value, you
 can apply `withoutDecoder` to the result.
 
+If you want to send the full value, but use the `PATCH` HTTP method, see
+`patchFull`.
+
 -}
 put : BackendUrl -> ReadWriteEndPoint error key value c p -> key -> value -> CrudRequest error value
 put backendUrl ((EndPoint endpoint) as ep) key value =
@@ -1054,6 +1072,9 @@ applyAccessToken accessToken ops =
 in order to gain type-safety about what kind of entity it is an ID for.
 So, to specify that you have an id for a clinic, you would say:
 
+    type ClinicId
+        = ClinicId
+
     clinidId : EntityId ClinicId
 
 -}
@@ -1061,11 +1082,11 @@ type EntityId a
     = EntityId Int
 
 
-{-| This is how you create a EntityId, if you have an `Int`. You can create
+{-| This is how you create an `EntityId`, if you have an `Int`. You can create
 any kind of `EntityId` this way ... so you would normally only do this in
 situations that are fundamentally untyped, such as when you are decoding
 JSON data. Except in those kind of "boundary" situations, you should be
-working with the typed EntityIds.
+working with the typed `EntityIds`.
 -}
 toEntityId : Int -> EntityId a
 toEntityId =
@@ -1084,11 +1105,11 @@ fromEntityId (EntityId a) =
 
 {-| Decodes a EntityId.
 
-This just turns JSON int (or string that is an int) to a EntityId. You need
+This just turns JSON int (or string that is an int) to an `EntityId`. You need
 to supply the `field "id"` yourself, if necessary, since id's could be present
 in other fields as well.
 
-This decodes any kind of EntityId you like (since there is fundamentally no type
+This decodes any kind of `EntityId` you like (since there is fundamentally no type
 information in the JSON iself, of course). So, you need to verify that the type
 is correct yourself.
 
@@ -1111,18 +1132,18 @@ type EntityUuid a
     = EntityUuid String
 
 
-{-| This is how you create a EntityUuid, if you have a `String`. You can create
+{-| This is how you create a `EntityUuid`, if you have a `String`. You can create
 any kind of `EntityUuid` this way ... so you would normally only do this in
 situations that are fundamentally untyped, such as when you are decoding
 JSON data. Except in those kind of "boundary" situations, you should be
-working with the typed EntityUuids.
+working with the typed `EntityUuid`s.
 -}
 toEntityUuid : String -> EntityUuid a
 toEntityUuid =
     EntityUuid
 
 
-{-| This is how you get a `String` back from a `EntityUuid`. You should only use
+{-| This is how you get a `String` back from an `EntityUuid`. You should only use
 this in boundary situations, where you need to send the UUID out in an untyped
 way. Normally, you should just pass around the `EntityUuid` itself, to retain
 type-safety.
@@ -1132,7 +1153,7 @@ fromEntityUuid (EntityUuid a) =
     a
 
 
-{-| Decodes a EntityUuid.
+{-| Decodes an `EntityUuid`.
 -}
 decodeEntityUuid : Decoder (EntityUuid a)
 decodeEntityUuid =
