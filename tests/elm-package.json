@@ -1,18 +1,18 @@
 {
     "version": "1.0.0",
-    "summary": "Connect with a RESTful backend",
+    "summary": "Test Suites",
     "repository": "https://github.com/Gizra/elm-restful.git",
     "license": "MIT",
     "source-directories": [
-        "src"
+        "../src",
+        "."
     ],
-    "exposed-modules": [
-        "Restful.Endpoint",
-        "Restful.Login"
-    ],
+    "exposed-modules": [],
     "dependencies": {
-        "Gizra/elm-essentials": "1.2.0 <= v < 2.0.0",
         "elm-lang/core": "5.1.1 <= v < 6.0.0",
+        "elm-community/elm-test": "4.0.0 <= v < 5.0.0",
+        "Gizra/elm-essentials": "1.2.0 <= v < 2.0.0",
+        "elm-community/maybe-extra": "4.0.0 <= v < 5.0.0",
         "elm-lang/http": "1.0.0 <= v < 2.0.0",
         "krisajenkins/remotedata": "4.3.1 <= v < 5.0.0",
         "lukewestby/elm-http-builder": "5.1.0 <= v < 6.0.0",

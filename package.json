@@ -9,10 +9,11 @@
   "dependencies": {},
   "devDependencies": {
     "elm": "^0.18.0",
-    "elm-test": "^0.18.9"
+    "elm-doc-test": "^4.0.0",
+    "elm-test": "^0.18.12"
   },
   "scripts": {
-    "test": "elm-test"
+    "test": "elm-doc-test && elm-test"
   },
   "repository": {
     "type": "git",
