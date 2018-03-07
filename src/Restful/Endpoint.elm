@@ -10,6 +10,7 @@ module Restful.Endpoint
         , EntityId
         , EntityUuid
         , Offset
+        , QueryResult
         , Range
         , ReadOnly
         , ReadOnlyEndPoint
@@ -97,7 +98,7 @@ backend entities exposed through a Restful HTTP API.
 
 ## CRUD Operations
 
-@docs BackendUrl, Offset, Range
+@docs BackendUrl, Offset, Range, QueryResult
 @docs get, getMany, select, selectRange, patch, patchAny, patchFull, post, put, delete
 @docs CrudOperations, applyBackendUrl, applyAccessToken
 
