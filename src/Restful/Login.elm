@@ -557,6 +557,14 @@ type Msg user
 
 
 {-| Message which will try logging in against the specified backendUrl
+
+  - The second parameter is a list of query params to add the URL. (Typically,
+    you won't need this, so you can supply an empty list.
+
+  - The third parameter is the username.
+
+  - The fourth parameter is the password.
+
 -}
 tryLogin : BackendUrl -> List ( String, String ) -> String -> String -> Msg user
 tryLogin =
