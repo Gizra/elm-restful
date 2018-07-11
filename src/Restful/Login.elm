@@ -17,9 +17,14 @@ module Restful.Login
         , getData
         , getError
         , getLoginProgress
+        , getUser
         , hasAccessToken
         , hasValidAccessToken
-        , isProgressing
+        , isAnonymousUser
+        , isAuthenticatedUser
+        , isChecking
+        , isCheckingAccessToken
+        , isCheckingPassword
         , loggedOut
         , logout
         , mapAnonymousData
@@ -64,7 +69,11 @@ can be handled here.
 
 @docs maybeAnonymousData, maybeAuthenticatedData, getData
 @docs mapAnonymousData, mapAuthenticatedData, mapBoth
-@docs hasAccessToken, hasValidAccessToken, getError, getLoginProgress, isProgressing
+@docs hasAccessToken, hasValidAccessToken
+@docs getError, getLoginProgress
+@docs isAnonymousUser, isAuthenticatedUser
+@docs isChecking, isCheckingAccessToken, isCheckingPassword
+@docs getUser
 
 -}
 
@@ -163,6 +172,42 @@ type UserAndData anonymousData user authenticatedData
     | Authenticated (AuthenticatedUser user authenticatedData)
 
 
+{-| Is our user anonymous?
+-}
+isAnonymousUser : UserAndData anonymousData user authenticatedData -> Bool
+isAnonymousUser model =
+    case model of
+        Anonymous _ ->
+            True
+
+        Authenticated _ ->
+            False
+
+
+{-| Is our user authenticated?
+-}
+isAuthenticatedUser : UserAndData anonymousData user authenticatedData -> Bool
+isAuthenticatedUser model =
+    case model of
+        Anonymous _ ->
+            False
+
+        Authenticated _ ->
+            True
+
+
+{-| Gets the `user`, if we are authenticated.
+-}
+getUser : UserAndData anonymousData user authenticatedData -> Maybe user
+getUser model =
+    case model of
+        Anonymous _ ->
+            Nothing
+
+        Authenticated { credentials } ->
+            Just credentials.user
+
+
 {-| Gets the progress we are making towards login, if any. (For cases in which
 we have cached credentials, this would represent attempts to re-login where our
 credentials have expired).
@@ -177,17 +222,61 @@ getLoginProgress model =
             relogin
 
 
-{-| Are we waiting for a response from the backend to advance the login process?
+{-| Are we waiting for a response from the backend?
 -}
-isProgressing : UserAndData anonymousData user authenticatedData -> Bool
-isProgressing =
+isChecking : UserAndData anonymousData user authenticatedData -> Bool
+isChecking =
     getLoginProgress
-        >> Maybe.map loginProgressIsProgressing
+        >> Maybe.map loginProgressIsChecking
         >> Maybe.withDefault False
 
 
-loginProgressIsProgressing : LoginProgress user -> Bool
-loginProgressIsProgressing loginProgress =
+{-| Are we waiting for the backend to respond to a request to check our access token?
+-}
+isCheckingAccessToken : UserAndData anonymousData user authenticatedData -> Bool
+isCheckingAccessToken =
+    getLoginProgress
+        >> Maybe.map loginProgressIsCheckingAccessToken
+        >> Maybe.withDefault False
+
+
+{-| Are we waiting for the backend to respond to a request to check a username and password?
+-}
+isCheckingPassword : UserAndData anonymousData user authenticatedData -> Bool
+isCheckingPassword =
+    getLoginProgress
+        >> Maybe.map loginProgressIsCheckingPassword
+        >> Maybe.withDefault False
+
+
+loginProgressIsCheckingAccessToken : LoginProgress user -> Bool
+loginProgressIsCheckingAccessToken loginProgress =
+    case loginProgress of
+        Checking ByAccessToken ->
+            True
+
+        Checking ByPassword ->
+            False
+
+        LoginError _ ->
+            False
+
+
+loginProgressIsCheckingPassword : LoginProgress user -> Bool
+loginProgressIsCheckingPassword loginProgress =
+    case loginProgress of
+        Checking ByAccessToken ->
+            False
+
+        Checking ByPassword ->
+            True
+
+        LoginError _ ->
+            False
+
+
+loginProgressIsChecking : LoginProgress user -> Bool
+loginProgressIsChecking loginProgress =
     case loginProgress of
         Checking _ ->
             True
