@@ -158,7 +158,7 @@ relevant to anonymous users when you login.
     thrown away upon logout).
 
 -}
-type UserAndData user anonymousData authenticatedData
+type UserAndData anonymousData user authenticatedData
     = Anonymous (AnonymousUser user anonymousData)
     | Authenticated (AuthenticatedUser user authenticatedData)
 
@@ -167,7 +167,7 @@ type UserAndData user anonymousData authenticatedData
 we have cached credentials, this would represent attempts to re-login where our
 credentials have expired).
 -}
-getLoginProgress : UserAndData user anonymous authenticated -> Maybe (LoginProgress user)
+getLoginProgress : UserAndData anonymousData user authenticatedData -> Maybe (LoginProgress user)
 getLoginProgress model =
     case model of
         Anonymous { progress } ->
@@ -179,7 +179,7 @@ getLoginProgress model =
 
 {-| Are we waiting for a response from the backend to advance the login process?
 -}
-isProgressing : UserAndData user anonymous authenticated -> Bool
+isProgressing : UserAndData anonymousData user authenticatedData -> Bool
 isProgressing =
     getLoginProgress
         >> Maybe.map loginProgressIsProgressing
@@ -198,7 +198,7 @@ loginProgressIsProgressing loginProgress =
 
 {-| Do we have an error to report?
 -}
-getError : UserAndData user anonymous authenticated -> Maybe (LoginError user)
+getError : UserAndData anonymousData user authenticatedData -> Maybe (LoginError user)
 getError =
     getLoginProgress >> Maybe.andThen loginProgressToError
 
@@ -215,7 +215,7 @@ loginProgressToError loginProgress =
 
 {-| Extract the authenticated data as a Maybe, which will be `Just` if the user is logged in.
 -}
-maybeAuthenticatedData : UserAndData user anonymous authenticated -> Maybe authenticated
+maybeAuthenticatedData : UserAndData anonymousData user authenticatedData -> Maybe authenticatedData
 maybeAuthenticatedData model =
     case model of
         Anonymous _ ->
@@ -227,7 +227,7 @@ maybeAuthenticatedData model =
 
 {-| Extract the anonymous data as a Maybe, which will be `Just` if the user is not logged in.
 -}
-maybeAnonymousData : UserAndData user anonymous authenticated -> Maybe anonymous
+maybeAnonymousData : UserAndData anonymousData user authenticatedData -> Maybe anonymousData
 maybeAnonymousData model =
     case model of
         Anonymous { data } ->
@@ -244,12 +244,12 @@ you should manage **truly** common data outside of these structures ...
 this is only for data which you want to throw away when transitioning from
 logged in to logged out and vice versa.
 
-If you only want to deal with `authenticated` or `anonymous` data and leave the
+If you only want to deal with `authenticatedData` or `anonymousData` and leave the
 other possibility alone, see the `maybeAuthenticatedData` and `maybeAnonymousData`
 functions.
 
 -}
-getData : (anonymous -> a) -> (authenticated -> a) -> UserAndData user anonymous authenticated -> a
+getData : (anonymousData -> a) -> (authenticatedData -> a) -> UserAndData anonymousData user authenticatedData -> a
 getData anonFunc authenticatedFunc model =
     case model of
         Anonymous { data } ->
@@ -261,7 +261,7 @@ getData anonFunc authenticatedFunc model =
 
 {-| Map over the authenticated data, if the user is logged in.
 -}
-mapAuthenticatedData : (authenticated -> authenticated) -> UserAndData user anonymous authenticated -> UserAndData user anonymous authenticated
+mapAuthenticatedData : (authenticatedData -> authenticatedData) -> UserAndData anonymousData user authenticatedData -> UserAndData anonymousData user authenticatedData
 mapAuthenticatedData func model =
     case model of
         Anonymous _ ->
@@ -273,7 +273,7 @@ mapAuthenticatedData func model =
 
 {-| Map over the anonymous data, if the user is not logged in.
 -}
-mapAnonymousData : (anonymous -> anonymous) -> UserAndData user anonymous authenticated -> UserAndData user anonymous authenticated
+mapAnonymousData : (anonymousData -> anonymousData) -> UserAndData anonymousData user authenticatedData -> UserAndData anonymousData user authenticatedData
 mapAnonymousData func model =
     case model of
         Anonymous anonymous ->
@@ -286,7 +286,7 @@ mapAnonymousData func model =
 {-| Map over the data, choosing the mapping function depending on whether the
 user is logged in or not.
 -}
-mapBoth : (anonymous -> anonymous) -> (authenticated -> authenticated) -> UserAndData user anonymous authenticated -> UserAndData user anonymous authenticated
+mapBoth : (anonymousData -> anonymousData) -> (authenticatedData -> authenticatedData) -> UserAndData anonymousData user authenticatedData -> UserAndData anonymousData user authenticatedData
 mapBoth anonFunc authenticatedFunc model =
     case model of
         Anonymous _ ->
@@ -381,7 +381,7 @@ type alias AuthenticatedUser user data =
     }
 
 
-{-| Represents the data we if if we are not logged in.
+{-| Represents the data we have if we are not logged in.
 
   - progress
 
@@ -400,7 +400,7 @@ type alias AnonymousUser user data =
     }
 
 
-setLoginProgress : Maybe (LoginProgress user) -> UserAndData user anonymous authenticated -> UserAndData user anonymous authenticated
+setLoginProgress : Maybe (LoginProgress user) -> UserAndData anonymousData user authenticatedData -> UserAndData anonymousData user authenticatedData
 setLoginProgress progress model =
     case model of
         Anonymous anonymous ->
@@ -414,7 +414,7 @@ setLoginProgress progress model =
 to generate initial data if we didn't have some already (i.e. if this isn't
 a re-login). If it is a re-login, we just keep the data.
 -}
-setCredentials : Config user anonymous authenticated msg -> Credentials user -> UserAndData user anonymous authenticated -> UserAndData user anonymous authenticated
+setCredentials : Config anonymousData user authenticatedData msg -> Credentials user -> UserAndData anonymousData user authenticatedData -> UserAndData anonymousData user authenticatedData
 setCredentials config credentials model =
     case model of
         Anonymous _ ->
@@ -436,7 +436,7 @@ setCredentials config credentials model =
 
 {-| Use the supplied cached credentials, which may or may not have a cached user.
 -}
-setCachedCredentials : Config user anonymous authenticated msg -> CachedCredentials user -> UserAndData user anonymous authenticated -> UserAndData user anonymous authenticated
+setCachedCredentials : Config anonymousData user authenticatedData msg -> CachedCredentials user -> UserAndData anonymousData user authenticatedData -> UserAndData anonymousData user authenticatedData
 setCachedCredentials config cached model =
     case maybeCredentials cached of
         Just credentials ->
@@ -457,7 +457,7 @@ Note that you should use `logout` to actually perform the action of logging
 out, since that will also clear the cached credentials.
 
 -}
-loggedOut : Config user anonymous authenticated msg -> UserAndData user anonymous authenticated
+loggedOut : Config anonymousData user authenticatedData msg -> UserAndData anonymousData user authenticatedData
 loggedOut config =
     Anonymous
         { progress = Nothing
@@ -465,7 +465,7 @@ loggedOut config =
         }
 
 
-{-| Initializes a UserAndData by indicating that we're checking cached credentials
+{-| Initializes a `UserAndData` by indicating that we're checking cached credentials
 against the backend, and return a `Cmd` that will do that.
 
   - BackendUrl is the backend to check the cached credentials against.
@@ -476,21 +476,28 @@ against the backend, and return a `Cmd` that will do that.
     credentials for multiple backends, it's up to you to match your backendURL
     and your credentials.
 
-The UserAndData will start as `Anonymous (Just (Checking ByAccessToken))`. At this
-point, your UI should treat the login process as unresolved ... it will soon
-resolve one way or another. So, you might show a "checking for cached login"
-message, or just nothing.
+The UserAndData will start as `Anonymous`, with its `progress` field set to
+`(Just (Checking ByAccessToken))`. At this point, your UI should treat the
+login process as unresolved ... it will soon resolve one way or another.
+So, you might show a "checking for cached login" message, or just nothing.
 
-  - If we can decode the credentials, we'll try to use the access token against
-    the backend to get updated user information. Whether or not that succeeds,
-    we'll be in `Authenticated` state ... the result of checking the credentials will
-    affect whether `relogin` is required.
+  - If we can decode the access toekn, we'll try to use the access token against
+    the backend to get updated user information.
+      - It that succeeds, we'll swtich to `Authenticated` state.
 
-  - If we can't decode the credentials, we'll be in `Anonymous (Just progress)`
-    state, where `progress` will indicate the error we received.
+      - If it does not succeed, we'll try to decode a cached `user` (if you have
+        cached user information.
+          - It that succeeds, we'll be in `Authenticated` state, but we'll record
+            the error checking the access token in the `relogin` field.
+
+          - If we don't have a cached user, we'll be in `Anonymous` state, and we'll
+            record the error checking the access toekn in the `progress` field.
+
+  - If we can't decode the access token, we'll stay `Anonymous` and show `NotAsked`
+    as the progess.
 
 -}
-checkCachedCredentials : Config user anonymous authenticated msg -> BackendUrl -> String -> ( UserAndData user anonymous authenticated, Cmd msg )
+checkCachedCredentials : Config anonymousData user authenticatedData msg -> BackendUrl -> String -> ( UserAndData anonymousData user authenticatedData, Cmd msg )
 checkCachedCredentials config backendUrl value =
     let
         -- The third return parameter will necessarily be false, since we're
@@ -505,11 +512,18 @@ checkCachedCredentials config backendUrl value =
 You should be able to define this once, as a constant, and then use it
 where needed.
 
+The type variables have the following meanings.
+
+  - anonymousData
+
+    The type of data that is only for anonymous users ... that is, which
+    you'd like to throw away upon login.
+
   - user
 
     The type you use for your user.
 
-  - data
+  - authenticatedData
 
     The type of data that is only for users ... that is, which you'd like
     to throw away upon logout.
@@ -517,6 +531,8 @@ where needed.
   - msg
 
     Your Msg type.
+
+The fields have the following meanings.
 
   - loginPath
 
@@ -579,15 +595,15 @@ where needed.
     effect, we'll do the mapping, rather than making you do it.
 
 -}
-type alias Config user anonymous authenticated msg =
+type alias Config anonymousData user authenticatedData msg =
     { loginPath : String
     , logoutPath : Maybe String
     , userPath : String
     , decodeAccessToken : Decoder AccessToken
     , decodeUser : Decoder user
     , encodeUser : Maybe (user -> Value)
-    , initialAuthenticatedData : user -> authenticated
-    , initialAnonymousData : anonymous
+    , initialAuthenticatedData : user -> authenticatedData
+    , initialAnonymousData : anonymousData
     , cacheCredentials : BackendUrl -> String -> Cmd msg
     , tag : Msg user -> msg
     }
@@ -595,11 +611,11 @@ type alias Config user anonymous authenticated msg =
 
 {-| The parts of `Config` that tend to vary from one app to the next.
 -}
-type alias AppConfig user anonymous authenticated msg =
+type alias AppConfig anonymousData user authenticatedData msg =
     { decodeUser : Decoder user
     , encodeUser : Maybe (user -> Value)
-    , initialAuthenticatedData : user -> authenticated
-    , initialAnonymousData : anonymous
+    , initialAuthenticatedData : user -> authenticatedData
+    , initialAnonymousData : anonymousData
     , cacheCredentials : BackendUrl -> String -> Cmd msg
     , tag : Msg user -> msg
     }
@@ -608,7 +624,7 @@ type alias AppConfig user anonymous authenticated msg =
 {-| Make a `Config` that uses default values oriented towards Drupal's
 restful implementation.
 -}
-drupalConfig : AppConfig user anonymous authenticated msg -> Config user anonymous authenticated msg
+drupalConfig : AppConfig anonymousData user authenticatedData msg -> Config anonymousData user authenticatedData msg
 drupalConfig appConfig =
     { loginPath = "api/login-token"
     , logoutPath = Just "user/logout"
@@ -697,7 +713,7 @@ not reflecting state, but instead a kind of notification that we've
 just logged in.
 
 -}
-update : Config user anonymous authenticated msg -> Msg user -> UserAndData user anonymous authenticated -> ( UserAndData user anonymous authenticated, Cmd msg, Bool )
+update : Config anonymousData user authenticatedData msg -> Msg user -> UserAndData anonymousData user authenticatedData -> ( UserAndData anonymousData user authenticatedData, Cmd msg, Bool )
 update config msg model =
     case msg of
         HandleLoginAttempt retry result ->
@@ -871,7 +887,7 @@ update config msg model =
                     ( model, Cmd.none, False )
 
 
-encodeCredentials : Config user anonymous authenticated msg -> Credentials user -> String
+encodeCredentials : Config anonymousData user authenticatedData msg -> Credentials user -> String
 encodeCredentials config credentials =
     -- We only encode the accessToken and the user ... we provide the
     -- backendURL separately, so the app can decide whether to record
@@ -894,7 +910,7 @@ encodeCredentials config credentials =
         |> Json.Encode.encode 0
 
 
-decodeCachedCredentials : Config user anonymous authenticated msg -> BackendUrl -> Decoder (CachedCredentials user)
+decodeCachedCredentials : Config anonymousData user authenticated msg -> BackendUrl -> Decoder (CachedCredentials user)
 decodeCachedCredentials config backendUrl =
     let
         decodeAccessToken =
@@ -922,7 +938,7 @@ decodeCachedCredentials config backendUrl =
 If we don't know yet, we indicate `False`.
 
 -}
-hasValidAccessToken : UserAndData user anonymous authenticated -> Bool
+hasValidAccessToken : UserAndData anonymousData user authenticatedData -> Bool
 hasValidAccessToken status =
     case status of
         Anonymous _ ->
@@ -937,7 +953,7 @@ hasValidAccessToken status =
 If we're still checking, we say `False`.
 
 -}
-hasAccessToken : UserAndData user anonymous authenticated -> Bool
+hasAccessToken : UserAndData anonymousData user authenticatedData -> Bool
 hasAccessToken status =
     case status of
         Anonymous _ ->
@@ -953,7 +969,7 @@ If we're in a `Authenticated` state, we'll stay in that state ... we'll
 merely record that re-login is required.
 
 -}
-accessTokenRejected : Error -> UserAndData user anonymous authenticated -> UserAndData user anonymous authenticated
+accessTokenRejected : Error -> UserAndData anonymousData user authenticatedData -> UserAndData anonymousData user authenticatedData
 accessTokenRejected =
     retryAccessTokenRejected Nothing
 
@@ -961,7 +977,7 @@ accessTokenRejected =
 {-| Internal version of accessTokenRejected that will keep track of a msg
 we can use to retry.
 -}
-retryAccessTokenRejected : Maybe (Msg user) -> Error -> UserAndData user anonymous authenticated -> UserAndData user anonymous authenticated
+retryAccessTokenRejected : Maybe (Msg user) -> Error -> UserAndData anonymousData user authenticatedData -> UserAndData anonymousData user authenticatedData
 retryAccessTokenRejected retry error =
     setLoginProgress (Just <| LoginError <| classifyHttpError retry ByAccessToken error)
 
@@ -977,7 +993,7 @@ it only resets `Authenticated` (if that's what we are) to show that `relogin`
 is not required.
 
 -}
-accessTokenAccepted : UserAndData user anonymous authenticated -> UserAndData user anonymous authenticated
+accessTokenAccepted : UserAndData anonymousData user authenticatedData -> UserAndData anonymousData user authenticatedData
 accessTokenAccepted status =
     -- We return `status` unchanged as often as possible, for the sake of
     -- preserving referential equality where we can.
