@@ -25,6 +25,7 @@ module Restful.Login
         , isChecking
         , isCheckingAccessToken
         , isCheckingPassword
+        , loggedIn
         , loggedOut
         , logout
         , mapAnonymousData
@@ -52,7 +53,7 @@ can be handled here.
 
 ## Initialization
 
-@docs loggedOut, checkCachedCredentials
+@docs loggedOut, checkCachedCredentials, loggedIn
 
 
 ## Actions
@@ -535,22 +536,40 @@ setCachedCredentials config cached model =
             model
 
 
-{-| A status which represents the state in which the user is logged out,
-no progress is currently being made towards login, and we start with the
-initial data specified in our config.
+{-| A starting point which represents an anonymous user.
 
 This is one possible "starting point" for initializing the UserAndData. The other
-main starting point would be `checkCachedCredentials`.
+main starting points would be `checkCachedCredentials` or `loggedIn`.
 
 Note that you should use `logout` to actually perform the action of logging
 out, since that will also clear the cached credentials.
 
 -}
-loggedOut : Config anonymousData user authenticatedData msg -> UserAndData anonymousData user authenticatedData
-loggedOut config =
+loggedOut : anonymousData -> UserAndData anonymousData user authenticatedData
+loggedOut data =
     Anonymous
         { progress = Nothing
-        , data = config.initialAnonymousData
+        , data = data
+        }
+
+
+{-| A starting point which represents an authenticated user.
+
+This is one possible "starting point" for initializing the UserAndData. The
+other main starting points would be `checkCachedCredentials` or `loggedOut`.
+
+This is meant for cases where you've received credentials through some other
+mechanism.. For checking credentials, you'd use either
+`checkCachedCredentials` or `tryLogin`.
+
+-}
+loggedIn : Credentials user -> authenticatedData -> UserAndData anonymousData user authenticatedData
+loggedIn credentials data =
+    Authenticated
+        { credentials = credentials
+        , logout = NotAsked
+        , relogin = Nothing
+        , data = data
         }
 
 
@@ -592,7 +611,7 @@ checkCachedCredentials config backendUrl value =
         -- The third return parameter will necessarily be false, since we're
         -- just kicking off the credential check here.
         ( userStatus, cmd, _ ) =
-            update config (CheckCachedCredentials backendUrl value) (loggedOut config)
+            update config (CheckCachedCredentials backendUrl value) (loggedOut config.initialAnonymousData)
     in
     ( userStatus, cmd )
 
@@ -959,7 +978,7 @@ update config msg model =
                 ( Ok _, Authenticated login ) ->
                     -- We tell the app to cache credentials consisting of an empty object.
                     -- This is simpler than telling the app to delete credentials.
-                    ( loggedOut config
+                    ( loggedOut config.initialAnonymousData
                     , config.cacheCredentials login.credentials.backendUrl "{}"
                     , False
                     )
