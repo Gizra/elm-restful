@@ -589,23 +589,27 @@ against the backend, and return a `Cmd` that will do that.
 
   - BackendUrl is the backend to check the cached credentials against.
 
-  - The `String` parameter is the JSON string which your `cacheCredentials`
+  - The `Maybe String` parameter is the JSON string which your `cacheCredentials`
     function (from Config) has cached. So, it's up to you to fetch that value
     somehow, either via flags at startup, or via ports. If you've cached
     credentials for multiple backends, it's up to you to match your backendURL
     and your credentials.
 
-The UserAndData will start as `Anonymous`, with its `progress` field set to
-`(Just (Checking ByAccessToken))`. At this point, your UI should treat the
-login process as unresolved ... it will soon resolve one way or another.
-So, you might show a "checking for cached login" message, or just nothing.
+If you supply the cached credentials, then the following sequence of events
+will occur:
 
-  - If we can decode the access toekn, we'll try to use the access token against
-    the backend to get updated user information.
-      - It that succeeds, we'll swtich to `Authenticated` state.
+  - The `UserAndData` will start as `Anonymous`, with its `progress` field set to
+    `(Just (Checking ByAccessToken))`. At this point, your UI should treat
+    the login process as unresolved ... it will soon resolve one way or
+    another. So, you might show a "checking for cached login" message, or
+    just nothing.
+
+  - If we can decode the access toekn, we'll use the access token to get
+    updated user information from the backend.
+      - It that succeeds, we'll switch to `Authenticated` state.
 
       - If it does not succeed, we'll try to decode a cached `user` (if you have
-        cached user information.
+        cached user information).
           - It that succeeds, we'll be in `Authenticated` state, but we'll record
             the error checking the access token in the `relogin` field.
 
@@ -615,14 +619,23 @@ So, you might show a "checking for cached login" message, or just nothing.
   - If we can't decode the access token, we'll stay `Anonymous` and show `NotAsked`
     as the progess.
 
+If you don't supply any cached credentials, we'll simply start out as `Anonymous`,
+showing no progress.
+
 -}
-checkCachedCredentials : Config anonymousData user authenticatedData msg -> BackendUrl -> String -> ( UserAndData anonymousData user authenticatedData, Cmd msg )
-checkCachedCredentials config backendUrl value =
+checkCachedCredentials : Config anonymousData user authenticatedData msg -> BackendUrl -> Maybe String -> ( UserAndData anonymousData user authenticatedData, Cmd msg )
+checkCachedCredentials config backendUrl cached =
     let
-        -- The third return parameter will necessarily be false, since we're
-        -- just kicking off the credential check here.
+        model =
+            loggedOut config.initialAnonymousData
+
         ( userStatus, cmd, _ ) =
-            update config (CheckCachedCredentials backendUrl value) (loggedOut config.initialAnonymousData)
+            case cached of
+                Just json ->
+                    update config (CheckCachedCredentials backendUrl json) model
+
+                Nothing ->
+                    ( model, Cmd.none, Nothing )
     in
     ( userStatus, cmd )
 
