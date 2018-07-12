@@ -518,12 +518,12 @@ a re-login). If it is a re-login, we just keep the data.
 setCredentials : Config anonymousData user authenticatedData msg -> Credentials user -> UserAndData anonymousData user authenticatedData -> UserAndData anonymousData user authenticatedData
 setCredentials config credentials model =
     case model of
-        Anonymous _ ->
+        Anonymous { data } ->
             Authenticated
                 { credentials = credentials
                 , logout = NotAsked
                 , relogin = Nothing
-                , data = config.initialAuthenticatedData credentials.user
+                , data = config.initialAuthenticatedData data credentials.user
                 }
 
         Authenticated authenticated ->
@@ -687,12 +687,18 @@ The fields have the following meanings.
 
   - initialAuthenticatedData
 
-    Given the newly logged-in user, what initial data should we start with for that
-    user?
+    Given the newly logged-in user, and the anonymous data which we already had
+    before login, what initial data should we start with for the user?
+
+    In many cases, you may want to ignore one or both of the parameters ... that
+    is, the initial data may well be a constant. You can preserve as much or
+    as little of the anonymousData as you wish upon login. Whatever you don't
+    use will be thrown away.
 
   - initialAnonymousData
 
-    If we have no logged in user, or if we log out, what data should we start with?
+    If we have no logged in user, or if we log out, what data should we start with
+    for an anonymous user.
 
   - cacheCredentials
 
@@ -721,7 +727,7 @@ type alias Config anonymousData user authenticatedData msg =
     , decodeAccessToken : Decoder AccessToken
     , decodeUser : Decoder user
     , encodeUser : Maybe (user -> Value)
-    , initialAuthenticatedData : user -> authenticatedData
+    , initialAuthenticatedData : anonymousData -> user -> authenticatedData
     , initialAnonymousData : anonymousData
     , cacheCredentials : BackendUrl -> String -> Cmd msg
     , tag : Msg user -> msg
@@ -733,7 +739,7 @@ type alias Config anonymousData user authenticatedData msg =
 type alias AppConfig anonymousData user authenticatedData msg =
     { decodeUser : Decoder user
     , encodeUser : Maybe (user -> Value)
-    , initialAuthenticatedData : user -> authenticatedData
+    , initialAuthenticatedData : anonymousData -> user -> authenticatedData
     , initialAnonymousData : anonymousData
     , cacheCredentials : BackendUrl -> String -> Cmd msg
     , tag : Msg user -> msg
