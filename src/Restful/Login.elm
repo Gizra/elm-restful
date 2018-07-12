@@ -6,6 +6,7 @@ module Restful.Login
         , Config
         , Credentials
         , LoginError(..)
+        , LoginEvent(..)
         , LoginMethod(..)
         , LoginProgress(..)
         , Msg
@@ -48,7 +49,8 @@ can be handled here.
 
 ## Types
 
-@docs UserAndData, Credentials, AnonymousUser, AuthenticatedUser, LoginProgress, LoginMethod, LoginError
+@docs UserAndData, Credentials, AnonymousUser, AuthenticatedUser
+@docs LoginProgress, LoginEvent, LoginMethod, LoginError
 
 
 ## Initialization
@@ -433,6 +435,15 @@ type LoginMethod
     | ByPassword
 
 
+{-| Our `update` method returns a third parameter to indicate moments at which
+certain events occur, in case you'd like to trigger some further actions at
+that moment.
+-}
+type LoginEvent
+    = LoggedIn
+    | LoggedOut
+
+
 {-| Represents the data we have if we're logged in.
 
   - credentials
@@ -815,13 +826,14 @@ as follows:
 
     ...
 
-The third return parameter will be `True` at the very moment at which
-a successful login has been made. But only at that very moment ... it's
-not reflecting state, but instead a kind of notification that we've
-just logged in.
+The third return parameter will be `Just` at the very moment at which a
+successful login or logout has occurred. But only at that very moment ... it's
+not reflecting state, but instead a kind of notification that we've just logged
+in or logged out, in case there is some further action you'd like to
+trigger at that moment.
 
 -}
-update : Config anonymousData user authenticatedData msg -> Msg user -> UserAndData anonymousData user authenticatedData -> ( UserAndData anonymousData user authenticatedData, Cmd msg, Bool )
+update : Config anonymousData user authenticatedData msg -> Msg user -> UserAndData anonymousData user authenticatedData -> ( UserAndData anonymousData user authenticatedData, Cmd msg, Maybe LoginEvent )
 update config msg model =
     case msg of
         HandleLoginAttempt retry result ->
@@ -829,13 +841,13 @@ update config msg model =
                 Err err ->
                     ( setLoginProgress (Just (LoginError (classifyHttpError (Just retry) ByPassword err))) model
                     , Cmd.none
-                    , False
+                    , Nothing
                     )
 
                 Ok credentials ->
                     ( setCredentials config credentials model
                     , config.cacheCredentials credentials.backendUrl (encodeCredentials config credentials)
-                    , True
+                    , Just LoggedIn
                     )
 
         TryLogin backendUrl params name password ->
@@ -872,7 +884,7 @@ update config msg model =
             in
             ( setLoginProgress (Just (Checking ByPassword)) model
             , Cmd.map config.tag cmd
-            , False
+            , Nothing
             )
 
         HandleAccessTokenCheck retry credentials result ->
@@ -881,13 +893,15 @@ update config msg model =
                     ( setCachedCredentials config credentials model
                         |> retryAccessTokenRejected (Just retry) err
                     , Cmd.none
-                    , True
+                      -- If we have a cached user, then we're logged in even if
+                      -- our access token was rejected
+                    , Maybe.map (always LoggedIn) credentials.user
                     )
 
                 Ok user ->
                     ( setCachedCredentials config { credentials | user = Just user } model
                     , Cmd.none
-                    , True
+                    , Just LoggedIn
                     )
 
         CheckCachedCredentials backendUrl cachedValue ->
@@ -899,7 +913,7 @@ update config msg model =
                     -- the cached credentials.
                     ( setLoginProgress Nothing model
                     , Cmd.none
-                    , False
+                    , Nothing
                     )
 
                 Ok credentials ->
@@ -918,7 +932,7 @@ update config msg model =
                     in
                     ( setLoginProgress (Just (Checking ByAccessToken)) model
                     , cmd
-                    , False
+                    , Nothing
                     )
 
         Logout ->
@@ -926,7 +940,7 @@ update config msg model =
                 Anonymous _ ->
                     ( model
                     , Cmd.none
-                    , False
+                    , Nothing
                     )
 
                 Authenticated authenticated ->
@@ -941,7 +955,7 @@ update config msg model =
                                 |> HttpBuilder.toTask
                                 |> Task.attempt HandleLogoutAttempt
                                 |> Cmd.map config.tag
-                            , False
+                            , Nothing
                             )
 
                         Nothing ->
@@ -980,19 +994,19 @@ update config msg model =
                     -- This is simpler than telling the app to delete credentials.
                     ( loggedOut config.initialAnonymousData
                     , config.cacheCredentials login.credentials.backendUrl "{}"
-                    , False
+                    , Nothing
                     )
 
                 ( Err err, Authenticated login ) ->
                     -- Just record the error
                     ( Authenticated { login | logout = Failure err }
                     , Cmd.none
-                    , False
+                    , Nothing
                     )
 
                 _ ->
                     -- If we weren't logged in anyway, there's nothing to do.
-                    ( model, Cmd.none, False )
+                    ( model, Cmd.none, Nothing )
 
 
 encodeCredentials : Config anonymousData user authenticatedData msg -> Credentials user -> String
