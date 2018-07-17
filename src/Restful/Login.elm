@@ -843,7 +843,42 @@ classifyHttpError retry method error =
 your own msg type. So, you can integrate it into your app roughly
 as follows:
 
-    ...
+    loginConfig : Config AnonymousData User AuthenticatedData Msg
+    loginConfig =
+        { ...
+        , tag = LoginMsg
+        }
+
+    type alias Model =
+        { ...
+        , userAndData : UserAndData AnonymousData User AuthenticatedData
+        }
+
+    emptyModel : Model
+    emptyModel =
+        { ...
+        , userAndData = loggedOut
+        }
+
+    type Msg
+        = ...
+        | LoginMsg (Restful.Login.Msg User)
+
+    update : Msg -> Model -> (Model, Cmd Msg)
+    update msg model =
+        case msg of
+            ...
+
+            LoginMsg subMsg ->
+                let
+                    ( subModel, cmd, event ) =
+                        Restful.Login.update loginConfig subMsg model.userAndData
+                in
+                    -- Possibly do something additional depending on the `event`,
+                    -- if you need to trigger some action on login or logout
+                    ( { model | userAndData = subModel }
+                    , cmd
+                    )
 
 The third return parameter will be `Just` at the very moment at which a
 successful login or logout has occurred. But only at that very moment ... it's
