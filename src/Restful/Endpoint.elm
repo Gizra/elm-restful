@@ -167,19 +167,43 @@ environments (let us know if any changes are needed to handle your case).
 
 The type parameters have the following significance.
 
-| Type | Significance |
-| ---- | ------------ |
-| `writeable` | A type which flags whether this endpoint is read-only or read-write. |
-| `error` | Your error type. <p>If you don't want to do something special with errors, then it can just be `Http.Error` |
-| `key` | Your ID type. We usually use some kind of `EntityId`, but you can use something else if you like. |
-| `value` | Your value type. |
-| `created` | The type you would use in POST requests, when creating a new value. May be missing some information from `value` which the backend will supply. May be the same as `value` if POST isn't special. |
-| `params` | A type for the query params that this endpoint uses. <p>If your endpoint doesn't take params, just use `()` (or, a phantom type variable, if you like). |
+  - `writeable`
 
-In function signatures, we sometimes abbreviate these type parameters to something like
-`EndPoint w e p k v c` ... at least, for the type parameters that aren't relevant to
-that particular function. Also, we use the type aliases `ReadOnlyEndPoint` and `ReadWriteEndPoint`
-to simplify some function signatures.
+    A type which flags whether this endpoint is read-only or read-write.
+
+  - `error`
+
+    Your error type. If you don't want to do something special with errors, then
+    it can just be `Http.Error`
+
+  - `key`
+
+    Your ID type. We usually use some kind of `EntityId`, but you can use
+    something else if you like.
+
+  - `value`
+
+    Your value type.
+
+  - `created`
+
+    The type you would use in POST requests, when creating a new value.
+
+    May be missing some information from `value` which the backend will supply.
+    May be the same as `value` if POST isn't special.
+
+  - `params`
+
+    A type for the query params that this endpoint uses.
+
+    If your endpoint doesn't take params, just use `()` (or, a phantom type
+    variable, if you like).
+
+In function signatures, we sometimes abbreviate these type parameters to
+something like `EndPoint w e p k v c` ... at least, for the type parameters
+that aren't relevant to that particular function. Also, we use the type aliases
+`ReadOnlyEndPoint` and `ReadWriteEndPoint` to simplify some function
+signatures.
 
 To create an `EndPoint`, start with `drupalEndpoint` (or `endpoint`), and then use the various
 `with...` functions to customize it as needed.
