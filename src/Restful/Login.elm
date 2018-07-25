@@ -857,7 +857,7 @@ as follows:
     emptyModel : Model
     emptyModel =
         { ...
-        , userAndData = loggedOut
+        , userAndData = loggedOut initialAnonymousData
         }
 
     type Msg
