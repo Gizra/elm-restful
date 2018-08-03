@@ -35,6 +35,7 @@ module Restful.Login
         , mapBoth
         , maybeAnonymousData
         , maybeAuthenticatedData
+        , recordLogin
         , tryAccessToken
         , tryLogin
         , update
@@ -62,7 +63,7 @@ can be handled here.
 
 ## Actions
 
-@docs tryLogin, tryAccessToken, logout, accessTokenRejected, accessTokenAccepted
+@docs tryLogin, tryAccessToken, recordLogin, logout, accessTokenRejected, accessTokenAccepted
 
 
 ## Integration with your app
@@ -835,7 +836,7 @@ these messages with various functions (e.g. `tryLogin`, `logout`) and handle
 them with the `update` function.
 -}
 type Msg user
-    = HandleLoginAttempt (Msg user) LoginMethod (Result Error (Credentials user))
+    = HandleLoginAttempt (Maybe (Msg user)) LoginMethod (Result Error (Credentials user))
     | HandleLogoutAttempt (Result Error ())
     | TryLogout
     | TryAccessToken BackendUrl String
@@ -855,6 +856,19 @@ type Msg user
 tryLogin : BackendUrl -> List ( String, String ) -> String -> String -> Msg user
 tryLogin =
     TryPassword
+
+
+{-| Record a successful login which you've performed independently.
+
+This differs from `loggedIn` in that it will cache the credentials you supply.
+
+It differs from `checkAccessToken` in that it won't contact the backend to
+verify the credentials you supply.
+
+-}
+recordLogin : Credentials user -> Msg user
+recordLogin credentials =
+    HandleLoginAttempt Nothing ByPassword (Ok credentials)
 
 
 {-| Message which will try a new access token that you've obtained in some manner.
@@ -959,7 +973,7 @@ update config msg model =
         HandleLoginAttempt retry method result ->
             case result of
                 Err err ->
-                    ( setLoginProgress (Just (LoginError (classifyHttpError (Just retry) method err))) model
+                    ( setLoginProgress (Just (LoginError (classifyHttpError retry method err))) model
                     , Cmd.none
                     , Nothing
                     )
@@ -974,7 +988,7 @@ update config msg model =
             let
                 cmd =
                     requestUser config backendUrl accessToken
-                        |> Task.attempt (HandleLoginAttempt msg ByAccessToken)
+                        |> Task.attempt (HandleLoginAttempt (Just msg) ByAccessToken)
                         |> Cmd.map config.tag
             in
             ( setLoginProgress (Just (Checking ByAccessToken)) model
@@ -999,7 +1013,7 @@ update config msg model =
                 cmd =
                     requestAccessToken
                         |> Task.andThen (requestUser config backendUrl)
-                        |> Task.attempt (HandleLoginAttempt msg ByPassword)
+                        |> Task.attempt (HandleLoginAttempt (Just msg) ByPassword)
                         |> Cmd.map config.tag
             in
             ( setLoginProgress (Just (Checking ByPassword)) model
