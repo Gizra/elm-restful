@@ -13,6 +13,7 @@ module Restful.Login
         , UserAndData(..)
         , accessTokenAccepted
         , accessTokenRejected
+        , checkAccessToken
         , checkCachedCredentials
         , drupalConfig
         , getData
@@ -34,6 +35,7 @@ module Restful.Login
         , mapBoth
         , maybeAnonymousData
         , maybeAuthenticatedData
+        , tryAccessToken
         , tryLogin
         , update
         )
@@ -55,12 +57,12 @@ can be handled here.
 
 ## Initialization
 
-@docs loggedOut, checkCachedCredentials, loggedIn
+@docs loggedOut, checkCachedCredentials, checkAccessToken, loggedIn
 
 
 ## Actions
 
-@docs tryLogin, logout, accessTokenRejected, accessTokenAccepted
+@docs tryLogin, tryAccessToken, logout, accessTokenRejected, accessTokenAccepted
 
 
 ## Integration with your app
@@ -87,7 +89,7 @@ import Json.Decode as JD exposing (Decoder, field)
 import Json.Encode exposing (Value)
 import RemoteData exposing (RemoteData(..), WebData)
 import Restful.Endpoint exposing ((</>), AccessToken, BackendUrl)
-import Task
+import Task exposing (Task)
 
 
 {-| What a successful login ultimately results in is:
@@ -120,18 +122,6 @@ type alias CachedCredentials user =
     , backendUrl : BackendUrl
     , user : Maybe user
     }
-
-
-maybeCredentials : CachedCredentials user -> Maybe (Credentials user)
-maybeCredentials cached =
-    Maybe.map
-        (\user ->
-            { accessToken = cached.accessToken
-            , backendUrl = cached.backendUrl
-            , user = user
-            }
-        )
-        cached.user
 
 
 {-| Models the state of the login process, from beginning to end.
@@ -517,34 +507,21 @@ a re-login). If it is a re-login, we just keep the data.
 -}
 setCredentials : Config anonymousData user authenticatedData msg -> Credentials user -> UserAndData anonymousData user authenticatedData -> UserAndData anonymousData user authenticatedData
 setCredentials config credentials model =
-    case model of
-        Anonymous { data } ->
-            Authenticated
-                { credentials = credentials
-                , logout = NotAsked
-                , relogin = Nothing
-                , data = config.initialAuthenticatedData data credentials.user
-                }
+    let
+        newData =
+            case model of
+                Anonymous { data } ->
+                    config.initialAuthenticatedData data credentials.user
 
-        Authenticated authenticated ->
-            Authenticated
-                { credentials = credentials
-                , logout = NotAsked
-                , relogin = Nothing
-                , data = authenticated.data
-                }
-
-
-{-| Use the supplied cached credentials, which may or may not have a cached user.
--}
-setCachedCredentials : Config anonymousData user authenticatedData msg -> CachedCredentials user -> UserAndData anonymousData user authenticatedData -> UserAndData anonymousData user authenticatedData
-setCachedCredentials config cached model =
-    case maybeCredentials cached of
-        Just credentials ->
-            setCredentials config credentials model
-
-        Nothing ->
-            model
+                Authenticated { data } ->
+                    data
+    in
+    Authenticated
+        { credentials = credentials
+        , logout = NotAsked
+        , relogin = Nothing
+        , data = newData
+        }
 
 
 {-| A starting point which represents an anonymous user.
@@ -567,11 +544,12 @@ loggedOut data =
 {-| A starting point which represents an authenticated user.
 
 This is one possible "starting point" for initializing the UserAndData. The
-other main starting points would be `checkCachedCredentials` or `loggedOut`.
+other main starting points would be `checkCachedCredentials`,
+`checkAccessToken` or `loggedOut`.
 
-This is meant for cases where you've received credentials through some other
-mechanism.. For checking credentials, you'd use either
-`checkCachedCredentials` or `tryLogin`.
+Note that this function does not check these credentials against the backend,
+or cache them locally. For those purposes, you would want to use
+`checkCachedCredentials`, `checkAcctssToken`, or `tryAccessToken`.
 
 -}
 loggedIn : Credentials user -> authenticatedData -> UserAndData anonymousData user authenticatedData
@@ -616,28 +594,103 @@ will occur:
           - If we don't have a cached user, we'll be in `Anonymous` state, and we'll
             record the error checking the access toekn in the `progress` field.
 
-  - If we can't decode the access token, we'll stay `Anonymous` and show `NotAsked`
-    as the progess.
+  - If we can't decode the access token, we'll stay `Anonymous`.
 
 If you don't supply any cached credentials, we'll simply start out as `Anonymous`,
 showing no progress.
 
+If you don't have cached credentials, but you do have an access token, a `user`,
+or both, then you can use `checkAccessToken` instead.
+
 -}
 checkCachedCredentials : Config anonymousData user authenticatedData msg -> BackendUrl -> Maybe String -> ( UserAndData anonymousData user authenticatedData, Cmd msg )
 checkCachedCredentials config backendUrl cached =
-    let
-        model =
-            loggedOut config.initialAnonymousData
+    case cached of
+        Just json ->
+            case JD.decodeString (decodeCachedCredentials config backendUrl) json of
+                Err _ ->
+                    -- If we can't decode the cached credentials, we
+                    -- just give up and say that login is needed. This
+                    -- will, for instance, happen where we had logged
+                    -- out and cleared the cached credentials.
+                    ( loggedOut config.initialAnonymousData, Cmd.none )
 
-        ( userStatus, cmd, _ ) =
-            case cached of
-                Just json ->
-                    update config (CheckCachedCredentials backendUrl json) model
+                Ok credentials ->
+                    -- If we have credentials, then we will check the
+                    -- access token against the backend, to make sure
+                    -- that it is still valid. Any error will result in
+                    -- a `relogin` being recorded.
+                    checkAccessToken config backendUrl (Just credentials.accessToken) credentials.user
+
+        Nothing ->
+            -- If you don't supply credentials, we start out anonymous
+            ( loggedOut config.initialAnonymousData, Cmd.none )
+
+
+{-| An alternative to `checkCachedCredentials` for cases where you don't have
+the cached credentials, but you do have an access token, a `user`, or both.
+
+  - If you supply the access token, we will contact the backend to verify that
+    it is valid.
+      - If that succeeds, we will be in `AuthenticatedUser` state, with
+        credentials reflecting the supplied access token, and the `user` returned
+        by the backend.
+      - If that fails, then our state will depend on whether you supplied a
+        `user` or not.
+          - If you supplied a `user`, we will be in `AuthenticatedUser` state
+            (with that `user`), but our `relogin` field will indicate the
+            error checking the access token.
+          - If you did not supply a `user`, we will be in `AnonymousUser`
+            state, with the `progress` field indicating the error checking the
+            access token.
+  - If you don't supply an access token, then our state depends on whether you
+    provide a `user` or not.
+      - If you provide a `user`, we will be in `AuthenticatedUser` state with
+        that user, but our `relogin` field will indicate that the access token
+        was rejected.
+      - If you didn't provide a `user`, we will be in `AnonymousUser` state.
+
+Note that if you already have a `UserAndData` and you want to try a new access
+token that you've obtained in one way or another, you should use
+`tryAccessToken` instead.
+
+-}
+checkAccessToken : Config anonymousData user authenticatedData msg -> BackendUrl -> Maybe String -> Maybe user -> ( UserAndData anonymousData user authenticatedData, Cmd msg )
+checkAccessToken config backendUrl maybeAccessToken maybeUser =
+    let
+        initialModel =
+            case maybeUser of
+                Just user ->
+                    -- If we have a `user`, we'll always construct credentials, so
+                    -- that we can start in an "authenticated but needs relogin"
+                    -- state if necessary.
+                    loggedOut config.initialAnonymousData
+                        |> setCredentials config
+                            { accessToken = Maybe.withDefault "" maybeAccessToken
+                            , backendUrl = backendUrl
+                            , user = user
+                            }
 
                 Nothing ->
-                    ( model, Cmd.none, Nothing )
+                    loggedOut config.initialAnonymousData
     in
-    ( userStatus, cmd )
+    case maybeAccessToken of
+        Just accessToken ->
+            let
+                ( userAndData, cmd, _ ) =
+                    update config (TryAccessToken backendUrl accessToken) initialModel
+            in
+            ( userAndData, cmd )
+
+        Nothing ->
+            -- If there is no access token, then there is no point contacting
+            -- the backend. We could have a separate error for "no access otken
+            -- supplied", but it seems easier for now to just say that it was
+            -- rejected. (The user can avoid this by just starting with
+            -- `loggedOut` if they like).
+            ( setLoginProgress (Just (LoginError (Rejected ByAccessToken))) initialModel
+            , Cmd.none
+            )
 
 
 {-| Some static configuration which we need to integrate with your app.
@@ -782,12 +835,11 @@ these messages with various functions (e.g. `tryLogin`, `logout`) and handle
 them with the `update` function.
 -}
 type Msg user
-    = CheckCachedCredentials BackendUrl String
-    | HandleAccessTokenCheck (Msg user) (CachedCredentials user) (Result Error user)
-    | HandleLoginAttempt (Msg user) (Result Error (Credentials user))
+    = HandleLoginAttempt (Msg user) LoginMethod (Result Error (Credentials user))
     | HandleLogoutAttempt (Result Error ())
-    | Logout
-    | TryLogin BackendUrl (List ( String, String )) String String
+    | TryLogout
+    | TryAccessToken BackendUrl String
+    | TryPassword BackendUrl (List ( String, String )) String String
 
 
 {-| Message which will try logging in against the specified backendUrl
@@ -802,14 +854,28 @@ type Msg user
 -}
 tryLogin : BackendUrl -> List ( String, String ) -> String -> String -> Msg user
 tryLogin =
-    TryLogin
+    TryPassword
+
+
+{-| Message which will try a new access token that you've obtained in some manner.
+
+This is an alternative to `tryLogin` for cases in which you have some other way of
+obtaining an access token, other than by username and password.
+
+If you don't already have a `UserAndData`, then use `checkAccessToken` (or
+`checkCachedCredentials`) to obtain one.
+
+-}
+tryAccessToken : BackendUrl -> String -> Msg user
+tryAccessToken =
+    TryAccessToken
 
 
 {-| Message which will log out and clear cached credentials.
 -}
 logout : Msg user
 logout =
-    Logout
+    TryLogout
 
 
 {-| Specializes an HTTP error to our `LoginError` type.
@@ -890,10 +956,10 @@ trigger at that moment.
 update : Config anonymousData user authenticatedData msg -> Msg user -> UserAndData anonymousData user authenticatedData -> ( UserAndData anonymousData user authenticatedData, Cmd msg, Maybe LoginEvent )
 update config msg model =
     case msg of
-        HandleLoginAttempt retry result ->
+        HandleLoginAttempt retry method result ->
             case result of
                 Err err ->
-                    ( setLoginProgress (Just (LoginError (classifyHttpError (Just retry) ByPassword err))) model
+                    ( setLoginProgress (Just (LoginError (classifyHttpError (Just retry) method err))) model
                     , Cmd.none
                     , Nothing
                     )
@@ -904,7 +970,19 @@ update config msg model =
                     , Just LoggedIn
                     )
 
-        TryLogin backendUrl params name password ->
+        TryAccessToken backendUrl accessToken ->
+            let
+                cmd =
+                    requestUser config backendUrl accessToken
+                        |> Task.attempt (HandleLoginAttempt msg ByAccessToken)
+                        |> Cmd.map config.tag
+            in
+            ( setLoginProgress (Just (Checking ByAccessToken)) model
+            , cmd
+            , Nothing
+            )
+
+        TryPassword backendUrl params name password ->
             let
                 -- TODO: Perhaps the login method ought to be parameterized in the config,
                 -- with this as a default?
@@ -918,78 +996,18 @@ update config msg model =
                         |> withExpect (expectJson config.decodeAccessToken)
                         |> HttpBuilder.toTask
 
-                requestUser accessToken =
-                    HttpBuilder.get (backendUrl </> config.userPath)
-                        |> withQueryParams [ ( "access_token", accessToken ) ]
-                        |> withExpect (expectJson config.decodeUser)
-                        |> HttpBuilder.toTask
-                        |> Task.map
-                            (\user ->
-                                { accessToken = accessToken
-                                , backendUrl = backendUrl
-                                , user = user
-                                }
-                            )
-
                 cmd =
                     requestAccessToken
-                        |> Task.andThen requestUser
-                        |> Task.attempt (HandleLoginAttempt msg)
+                        |> Task.andThen (requestUser config backendUrl)
+                        |> Task.attempt (HandleLoginAttempt msg ByPassword)
+                        |> Cmd.map config.tag
             in
             ( setLoginProgress (Just (Checking ByPassword)) model
-            , Cmd.map config.tag cmd
+            , cmd
             , Nothing
             )
 
-        HandleAccessTokenCheck retry credentials result ->
-            case result of
-                Err err ->
-                    ( setCachedCredentials config credentials model
-                        |> retryAccessTokenRejected (Just retry) err
-                    , Cmd.none
-                      -- If we have a cached user, then we're logged in even if
-                      -- our access token was rejected
-                    , Maybe.map (always LoggedIn) credentials.user
-                    )
-
-                Ok user ->
-                    ( setCachedCredentials config { credentials | user = Just user } model
-                    , Cmd.none
-                    , Just LoggedIn
-                    )
-
-        CheckCachedCredentials backendUrl cachedValue ->
-            case JD.decodeString (decodeCachedCredentials config backendUrl) cachedValue of
-                Err _ ->
-                    -- If we can't decode the cached credentials, we just
-                    -- give up and say that login is needed. This will, for
-                    -- instance, happen where we had logged out and cleared
-                    -- the cached credentials.
-                    ( setLoginProgress Nothing model
-                    , Cmd.none
-                    , Nothing
-                    )
-
-                Ok credentials ->
-                    -- If we have credentials, then we will check the access
-                    -- token against the backend, to make sure that it is still
-                    -- valid. Any error will result in a `relogin` being
-                    -- recorded.
-                    let
-                        cmd =
-                            HttpBuilder.get (backendUrl </> config.userPath)
-                                |> withQueryParams [ ( "access_token", credentials.accessToken ) ]
-                                |> withExpect (expectJson config.decodeUser)
-                                |> HttpBuilder.toTask
-                                |> Task.attempt (HandleAccessTokenCheck msg credentials)
-                                |> Cmd.map config.tag
-                    in
-                    ( setLoginProgress (Just (Checking ByAccessToken)) model
-                    , cmd
-                    , Nothing
-                    )
-
-        Logout ->
+        TryLogout ->
             case model of
                 Anonymous _ ->
                     ( model
@@ -1029,38 +1047,55 @@ update config msg model =
         -- For this reason, we only locally record a logout when this request
         -- succeeds ... otherwise, we show an error.
         HandleLogoutAttempt result ->
-            let
-                -- A 403 Forbidden response is actually success, in this case!
-                adjustedResult =
-                    case result of
-                        Err (BadStatus response) ->
-                            if response.status.code == 403 then
-                                Ok ()
-                            else
-                                result
-
-                        _ ->
-                            result
-            in
-            case ( adjustedResult, model ) of
-                ( Ok _, Authenticated login ) ->
-                    -- We tell the app to cache credentials consisting of an empty object.
-                    -- This is simpler than telling the app to delete credentials.
-                    ( loggedOut config.initialAnonymousData
-                    , config.cacheCredentials login.credentials.backendUrl "{}"
-                    , Nothing
-                    )
-
-                ( Err err, Authenticated login ) ->
-                    -- Just record the error
-                    ( Authenticated { login | logout = Failure err }
-                    , Cmd.none
-                    , Nothing
-                    )
-
-                _ ->
+            case model of
+                Anonymous _ ->
                     -- If we weren't logged in anyway, there's nothing to do.
                     ( model, Cmd.none, Nothing )
+
+                Authenticated login ->
+                    let
+                        -- A 403 Forbidden response is actually success, in this case!
+                        adjustedResult =
+                            case result of
+                                Err (BadStatus response) ->
+                                    if response.status.code == 403 then
+                                        Ok ()
+                                    else
+                                        result
+
+                                _ ->
+                                    result
+                    in
+                    case adjustedResult of
+                        Ok _ ->
+                            -- We tell the app to cache credentials consisting of an empty object.
+                            -- This is simpler than telling the app to delete credentials.
+                            ( loggedOut config.initialAnonymousData
+                            , config.cacheCredentials login.credentials.backendUrl "{}"
+                            , Just LoggedOut
+                            )
+
+                        Err err ->
+                            -- Just record the error
+                            ( Authenticated { login | logout = Failure err }
+                            , Cmd.none
+                            , Nothing
+                            )
+
+
+requestUser : Config anonymousData user authenticatedData msg -> String -> String -> Task Error (Credentials user)
+requestUser config backendUrl accessToken =
+    HttpBuilder.get (backendUrl </> config.userPath)
+        |> withQueryParams [ ( "access_token", accessToken ) ]
+        |> withExpect (expectJson config.decodeUser)
+        |> HttpBuilder.toTask
+        |> Task.map
+            (\user ->
+                { accessToken = accessToken
+                , backendUrl = backendUrl
+                , user = user
+                }
+            )
 
 
 encodeCredentials : Config anonymousData user authenticatedData msg -> Credentials user -> String
