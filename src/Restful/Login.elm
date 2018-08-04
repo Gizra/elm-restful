@@ -45,9 +45,124 @@ module Restful.Login
 but not the UI -- the idea is that the UI will vary more than the basic logic
 of logging in does.
 
-Of course, this model will probably be supplied as a parameter to functions
-that manipulate the UI, and those functions will probably return messages that
-can be handled here.
+To integrate this module with your app, you would take roughly the following
+steps.
+
+1.  Store the `UserAndData` type
+
+The `UserAndData` type is our main type, encapsulating the state of the login
+process. So, you would need to integrate it into your own model, something
+like this:
+
+    type alias Model =
+        { ...
+        , userAndDAta : UserAndData AnonymousData User AuthenticatedData
+        , ...
+        }
+
+See the documentation for `UserAndData` for an explanation of what the type
+variables signify:
+
+  - `User` would be the type you use to keep track of users.
+  - `AnonymousData` would be your type for data that applies only to anonymous
+    users.
+  - `AuthetnicatedData` would be your type for data that applies only to
+    authenticated users.
+
+Note that `AnonymousData` and `AuthenticatedData` are optional -- you can just
+specify `()` if you want to manage your app's own data differently.
+
+1.  Provide a configuration
+
+Several functions -- particularly `update` -- require a `Cofing` to operate.
+Normally, it should be possible to make this a "static" `Config`. That is,
+you should normally be able to define this once, and then supply it where
+needed. To put it another way, it is intended to consist of things that
+do not change from one moment to the next.
+
+See the documentation for the `Config` type for a more detailed explanation.
+If you happen to be running against a Drupal backend, the `drupalConfig`
+function allows you to create a config that uses various defaults which work
+with Drupal. For other backends, you might write your own similar function to
+turn an `AppConfig` into a `Config` (since `AppConfig` contains the parts
+of a `Config` that tend to vary from one app to another).
+
+1.  Initialize your `UserAndData`
+
+You will need some starting point for your `UserAndData` when your app starts
+up. There are a number of possibilities, depending on how you want to organize
+the startup process for your app.
+
+  - You can use `loggedOut` as a starting point. This could be sensible if
+    you have no cached credentials to check (or you don't want to cache
+    credentials locally).
+
+  - If you have cached credentials (that is, the string previously provided
+    to your `Config.cacheCredentials`), then you can start off with
+    `checkCachedCredentials`. (You might, for instance, pass in your cached
+    credentials with your app's `flags`).
+
+  - If you don't have cached credentials, but you have an access token or
+    a `user`, you can start off with `checkAccessToken`.
+
+  - You can use `loggedIn` as a starting point, but doing so neither caches
+    your credentials, nor checks with the backend to see whether they are
+    valid. So, often you'll want a different choice.
+
+1.  Integrate with your `update` function
+
+You'll need to integrate this module with your `Msg` type and your `update`
+function. There is some example code in the documenttion for `update`.
+
+There are a few messages you might sometimes want to send when
+certain events occur in your app.
+
+  - If you obtain an access token and want to use it with your existing
+    `UserAndData`, you can use `tryAccessToken` to check the access token
+    against the backend and cache any credentials you obtain.
+
+  - If you obtain an access token and the `user` information indpendently
+    (perhaps as part of a registration process), you can use `recordLogin` to
+    cache those credentials locally without contacting the backend again.
+
+  - Use `trayLogin` to try logging in with a username and password.
+
+  - Use `logout` to logout. (Unlike `loggedOut`, this actually deletes any
+    cached credentials).
+
+1.  Integrate with your `view` function
+
+This module does not provide any particular way of writing the HTML
+for your "login" page -- that's up to you, since it varies so much
+from one app to the next.
+
+Many of the type constructors are exported, so you can write
+`case` statements to show one thing or another, depending on whether
+you are `Anonymous` or `Authenticated` etc. You also may find various
+functions helpful which summarize some information about the login
+process, like `getLoginProgress`, `getError`, `isChecking` etc.
+
+To trigger messages from the view, look at functions such as
+`tryLogin` and `logout`.
+
+1.  Use the `anonymousData` and `authenticatedData`
+
+If your app has some data which only applies to anonymous users,
+or only to authenticated users, you can (optiontally) use the
+`UserAndData` type to help manage it.
+
+  - When someone successfully logs in, your `Config.initialAuthenticatedData`
+    function will be used to initialize their data.
+
+  - When someone logs out, the `authenticatedData` will be thrown away,
+    and we'll start with `Config.initialAnonymousData` again.
+
+So, you can use this if you find it helpful. In that case, you'll
+want to look at functions like `mapAnonymousData`, `mapAuthenticatedData`,
+`mapBoth`, etc.
+
+If this doesn't seem helpful, you can use a `()` for the `anonymousData` or
+`authenticatedData` types.
 
 
 ## Types
@@ -63,7 +178,7 @@ can be handled here.
 
 ## Actions
 
-@docs tryLogin, tryAccessToken, recordLogin, logout, accessTokenRejected, accessTokenAccepted
+@docs tryLogin, tryAccessToken, recordLogin, logout
 
 
 ## Integration with your app
@@ -71,15 +186,20 @@ can be handled here.
 @docs Config, AppConfig, drupalConfig, Msg, update
 
 
-## Accessing the data associated with the login
+## Accessing data about the login process
+
+@docs hasAccessToken, hasValidAccessToken
+@docs accessTokenRejected, accessTokenAccepted
+@docs getError, getLoginProgress
+@docs getUser
+@docs isAnonymousUser, isAuthenticatedUser
+@docs isChecking, isCheckingAccessToken, isCheckingPassword
+
+
+## Accessing your app's data
 
 @docs maybeAnonymousData, maybeAuthenticatedData, getData
 @docs mapAnonymousData, mapAuthenticatedData, mapBoth
-@docs hasAccessToken, hasValidAccessToken
-@docs getError, getLoginProgress
-@docs isAnonymousUser, isAuthenticatedUser
-@docs isChecking, isCheckingAccessToken, isCheckingPassword
-@docs getUser
 
 -}
 
@@ -127,13 +247,14 @@ type alias CachedCredentials user =
 
 {-| Models the state of the login process, from beginning to end.
 
-  - `user` is the type we use to model information about the user
-    (e.g. name etc.). If we have a cached access token, we check whether
-    it's still valid by making a request for user data.
+  - `user` is the type we use to model information about the user (e.g. name,
+    userId, etc.). If we have a cached access token, we check whether it's still
+    valid by making a request for user data.
 
-  - `authenticatedData` is a type for data that we only keep for logged-in users. It
-    facilitates forgetting that data when we logout ... it's baked into the type.
-    If you don't want to bother with that, you can use a Tuple0 here ... that is, `()`.
+  - `authenticatedData` is a type for data that we only keep for logged-in
+    users. It facilitates forgetting that data when we logout ... it's baked into
+    the type. If you don't want to bother with that, you can use a Tuple0 here
+    ... that is, `()`.
 
   - `anonymousData` is a type for data that we only keep for anonymous users. It
     facilitates forgetting that data when we login ... it's baked into the type.
@@ -146,6 +267,8 @@ successfully login. For instance, you might have an endpoint that returns
 one set of things for anonymous users and a different set of things for
 logged-in users. In that case, you might want to throw away the data
 relevant to anonymous users when you login.
+
+Essentially, we can be in one of two states:
 
   - Anonymous
 
@@ -203,8 +326,8 @@ getUser model =
 
 
 {-| Gets the progress we are making towards login, if any. (For cases in which
-we have cached credentials, this would represent attempts to re-login where our
-credentials have expired).
+we are already `Authenticated`, this would represent attempts to re-login where
+our credentials have expired).
 -}
 getLoginProgress : UserAndData anonymousData user authenticatedData -> Maybe (LoginProgress user)
 getLoginProgress model =
@@ -296,7 +419,8 @@ loginProgressToError loginProgress =
             Just err
 
 
-{-| Extract the authenticated data as a Maybe, which will be `Just` if the user is logged in.
+{-| Extract the authenticated data as a `Maybe`, which will be `Just` if the
+user is `Authenticated`.
 -}
 maybeAuthenticatedData : UserAndData anonymousData user authenticatedData -> Maybe authenticatedData
 maybeAuthenticatedData model =
@@ -308,7 +432,8 @@ maybeAuthenticatedData model =
             Just data
 
 
-{-| Extract the anonymous data as a Maybe, which will be `Just` if the user is not logged in.
+{-| Extract the anonymous data as a `Maybe`, which will be `Just` if the user
+is `Anonymous`.
 -}
 maybeAnonymousData : UserAndData anonymousData user authenticatedData -> Maybe anonymousData
 maybeAnonymousData model =
@@ -322,10 +447,10 @@ maybeAnonymousData model =
 
 {-| Extract the data by turning either anonymous data or authenticated data
 into a common data type. This could be useful if there are some common elements
-to your `anonymous` and `authenticated` data types. Though, remember that
-you should manage **truly** common data outside of these structures ...
-this is only for data which you want to throw away when transitioning from
-logged in to logged out and vice versa.
+to your `anonymousData` and `authenticatedData` types. Though, remember
+that you should manage **truly** common data outside of these structures
+... this is only for data which you want to throw away when transitioning
+from logged in to logged out and vice versa.
 
 If you only want to deal with `authenticatedData` or `anonymousData` and leave the
 other possibility alone, see the `maybeAuthenticatedData` and `maybeAnonymousData`
@@ -342,7 +467,7 @@ getData anonFunc authenticatedFunc model =
             authenticatedFunc data
 
 
-{-| Map over the authenticated data, if the user is logged in.
+{-| Map over the authenticated data, if the user is `Authenticated`.
 -}
 mapAuthenticatedData : (authenticatedData -> authenticatedData) -> UserAndData anonymousData user authenticatedData -> UserAndData anonymousData user authenticatedData
 mapAuthenticatedData func model =
@@ -354,7 +479,7 @@ mapAuthenticatedData func model =
             Authenticated { authenticated | data = func authenticated.data }
 
 
-{-| Map over the anonymous data, if the user is not logged in.
+{-| Map over the anonymous data, if the user is `Anonymous`.
 -}
 mapAnonymousData : (anonymousData -> anonymousData) -> UserAndData anonymousData user authenticatedData -> UserAndData anonymousData user authenticatedData
 mapAnonymousData func model =
@@ -367,7 +492,7 @@ mapAnonymousData func model =
 
 
 {-| Map over the data, choosing the mapping function depending on whether the
-user is logged in or not.
+user is `Authenticated` or `Anonymous`.
 -}
 mapBoth : (anonymousData -> anonymousData) -> (authenticatedData -> authenticatedData) -> UserAndData anonymousData user authenticatedData -> UserAndData anonymousData user authenticatedData
 mapBoth anonFunc authenticatedFunc model =
@@ -409,7 +534,7 @@ type LoginProgress user
     We got some other HTTP error. That is, the backend did not definitely
     indicate that our credentials are invalid, but some other sort of HTTP
     error occurred. If the error might be transient ... that is, if
-    retrying might help ... then we include a `msg` you can send in
+    retrying might help ... then we include a `Msg` you can send in
     order to retry.
 
 -}
@@ -452,12 +577,8 @@ type LoginEvent
     Do we need to re-login? If our credentials are rejected, we don't
     transition back to `Anonymous` immediately, since that would prematurely
     throw away some information that we may want to keep. Instead, we mark that
-    relogin is `Just LoginRequired`. We can then track the relogin process
+    relogin is `Just (LoginError ...)`. We can then track the relogin process
     without disturbing the other data.
-
-    Note that we shouldn't switch relogin to `Just` if there some kind of
-    transient network error ... only if our access token is definitely
-    rejected because it is permanently invalid.
 
   - data
 
@@ -527,11 +648,13 @@ setCredentials config credentials model =
 
 {-| A starting point which represents an anonymous user.
 
-This is one possible "starting point" for initializing the UserAndData. The other
-main starting points would be `checkCachedCredentials` or `loggedIn`.
+This is a useful "starting point" for initializing your `UserAndData` if you
+have no credentials to check. If you do have some credentials, then consider
+`checkCachedCredentials` or `checkAccessToken` instead.
 
 Note that you should use `logout` to actually perform the action of logging
-out, since that will also clear the cached credentials.
+out, since that will also clear the cached credentials (and, if configured
+to do so, contact the backend).
 
 -}
 loggedOut : anonymousData -> UserAndData anonymousData user authenticatedData
@@ -544,13 +667,13 @@ loggedOut data =
 
 {-| A starting point which represents an authenticated user.
 
-This is one possible "starting point" for initializing the UserAndData. The
-other main starting points would be `checkCachedCredentials`,
-`checkAccessToken` or `loggedOut`.
+Note that this function does not check the supplied credentials against the
+backend, or cache them locally. For those purposes, you would want to consider
+starting with `checkCachedCredentials` or `checkAccessToken` instead.
 
-Note that this function does not check these credentials against the backend,
-or cache them locally. For those purposes, you would want to use
-`checkCachedCredentials`, `checkAcctssToken`, or `tryAccessToken`.
+If you already have the full `Credentials` data and you'd like to cache those
+credentials, but not check them against the backend, you can start with
+`LoggedOut` and then use a `recordLogin` message to cache the credentials.
 
 -}
 loggedIn : Credentials user -> authenticatedData -> UserAndData anonymousData user authenticatedData
@@ -568,11 +691,11 @@ against the backend, and return a `Cmd` that will do that.
 
   - BackendUrl is the backend to check the cached credentials against.
 
-  - The `Maybe String` parameter is the JSON string which your `cacheCredentials`
-    function (from Config) has cached. So, it's up to you to fetch that value
-    somehow, either via flags at startup, or via ports. If you've cached
-    credentials for multiple backends, it's up to you to match your backendURL
-    and your credentials.
+  - The `Maybe String` parameter is the JSON string which your
+    `Config.cacheCredentials` function has cached. So, it's up to you to
+    fetch that value somehow, either via flags at startup, or via ports. If
+    you've cached credentials for multiple backends, it's up to you to match
+    your backendURL and your credentials.
 
 If you supply the cached credentials, then the following sequence of events
 will occur:
@@ -653,10 +776,12 @@ the cached credentials, but you do have an access token, a `user`, or both.
 
 Note that if you already have a `UserAndData` and you want to try a new access
 token that you've obtained in one way or another, you should use
-`tryAccessToken` instead.
+`tryAccessToken` instead. You can also use `recordLogin` to cache
+credentials and `user` data you've obtained in another way, without
+checking with the backend.
 
 -}
-checkAccessToken : Config anonymousData user authenticatedData msg -> BackendUrl -> Maybe String -> Maybe user -> ( UserAndData anonymousData user authenticatedData, Cmd msg )
+checkAccessToken : Config anonymousData user authenticatedData msg -> BackendUrl -> Maybe AccessToken -> Maybe user -> ( UserAndData anonymousData user authenticatedData, Cmd msg )
 checkAccessToken config backendUrl maybeAccessToken maybeUser =
     let
         initialModel =
@@ -716,7 +841,7 @@ The type variables have the following meanings.
 
   - msg
 
-    Your Msg type.
+    Your `Msg` type.
 
 The fields have the following meanings.
 
@@ -729,20 +854,20 @@ The fields have the following meanings.
 
     Relative to a backendUrl, what's the path we can send a GET to in order
     to logout? E.g. to destroy a session cookie, if it's HTTP only, so we can't
-    destroy it from Javascript.
+    destroy it from Javascript. e.g. `Just "user/logout"`
 
   - userPath
 
     Once we have an access token, what's the path to the endpoint from which we
-    can request information about the current user?
+    can request information about the current user? e.g. "api/me"
 
   - decodeAccessToken
 
-    A decoder for an access token, given the response from the loginPath
+    Given the response from the `loginPath`, how can we decode the access token?
 
   - decodeUser
 
-    A decoder for the `user` type, as send from userPath.
+    Given the response from `userPath`, how can we decode your `user` type?
 
   - encodeUser
 
@@ -750,7 +875,8 @@ The fields have the following meanings.
     used to cache the `user` object in local storage along with the access
     token. This would mainly be useful if you want to remember who was last
     logged in when your app is offline. If you don't need to do that, you could
-    supply `Nothing` here.
+    supply `Nothing` here. (In that case, we'll still cache the access token,
+    but we won't cache the `user`).
 
   - initialAuthenticatedData
 
@@ -759,7 +885,7 @@ The fields have the following meanings.
 
     In many cases, you may want to ignore one or both of the parameters ... that
     is, the initial data may well be a constant. You can preserve as much or
-    as little of the anonymousData as you wish upon login. Whatever you don't
+    as little of the `anonymousData` as you wish upon login. Whatever you don't
     use will be thrown away.
 
   - initialAnonymousData
@@ -839,14 +965,14 @@ type Msg user
     = HandleLoginAttempt (Maybe (Msg user)) LoginMethod (Result Error (Credentials user))
     | HandleLogoutAttempt (Result Error ())
     | TryLogout
-    | TryAccessToken BackendUrl String
+    | TryAccessToken BackendUrl AccessToken
     | TryPassword BackendUrl (List ( String, String )) String String
 
 
 {-| Message which will try logging in against the specified backendUrl
 
   - The second parameter is a list of query params to add the URL. (Typically,
-    you won't need this, so you can supply an empty list.
+    you won't need this, so you can supply an empty list.)
 
   - The third parameter is the username.
 
@@ -874,18 +1000,22 @@ recordLogin credentials =
 {-| Message which will try a new access token that you've obtained in some manner.
 
 This is an alternative to `tryLogin` for cases in which you have some other way of
-obtaining an access token, other than by username and password.
+obtaining an access token (other than by username and password).
 
 If you don't already have a `UserAndData`, then use `checkAccessToken` (or
 `checkCachedCredentials`) to obtain one.
 
 -}
-tryAccessToken : BackendUrl -> String -> Msg user
+tryAccessToken : BackendUrl -> AccessToken -> Msg user
 tryAccessToken =
     TryAccessToken
 
 
 {-| Message which will log out and clear cached credentials.
+
+If you supplied a `Config.logoutPath`, then this will also contact the backend
+at that path.
+
 -}
 logout : Msg user
 logout =
@@ -932,12 +1062,6 @@ as follows:
     type alias Model =
         { ...
         , userAndData : UserAndData AnonymousData User AuthenticatedData
-        }
-
-    emptyModel : Model
-    emptyModel =
-        { ...
-        , userAndData = loggedOut initialAnonymousData
         }
 
     type Msg
@@ -1160,7 +1284,7 @@ decodeCachedCredentials config backendUrl =
 
 {-| As far as we know, do we have a still-valid access token?
 
-If we don't know yet, we indicate `False`.
+If we're still checking, we indicate `False`.
 
 -}
 hasValidAccessToken : UserAndData anonymousData user authenticatedData -> Bool
@@ -1190,7 +1314,7 @@ hasAccessToken status =
 
 {-| Record the fact that our access token was rejected.
 
-If we're in a `Authenticated` state, we'll stay in that state ... we'll
+If we're in an `Authenticated` state, we'll stay in that state ... we'll
 merely record that re-login is required.
 
 -}
