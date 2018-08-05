@@ -635,7 +635,11 @@ tokenUrlParam =
 (</>) left right =
     case ( String.endsWith "/" left, String.startsWith "/" right ) of
         ( False, False ) ->
-            left ++ "/" ++ right
+            if String.isEmpty right then
+                -- The `path` is empty, so don't add a trailing slash.
+                left
+            else
+                left ++ "/" ++ right
 
         ( True, True ) ->
             left ++ String.dropLeft 1 right
