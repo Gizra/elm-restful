@@ -46,7 +46,7 @@ exampleUser =
 exampleCredentials : Credentials User
 exampleCredentials =
     { accessToken = "adkfja;lskdj28d7skd"
-    , backendUrl = "http:/gizra.com/"
+    , backendUrl = "https:/example.com/"
     , user = exampleUser
     }
 
