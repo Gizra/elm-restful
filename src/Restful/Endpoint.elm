@@ -630,18 +630,27 @@ tokenUrlParam =
 
     "http://www.apple.com/" </> "/path" --> "http://www.apple.com/path"
 
+    "" </> "path" --> "path"
+
+    "http://www.apple.com/path" </> "" --> "http://www.apple.com/path"
+
 -}
 (</>) : String -> String -> String
 (</>) left right =
-    case ( String.endsWith "/" left, String.startsWith "/" right ) of
-        ( False, False ) ->
-            left ++ "/" ++ right
+    if String.isEmpty left then
+        right
+    else if String.isEmpty right then
+        left
+    else
+        case ( String.endsWith "/" left, String.startsWith "/" right ) of
+            ( False, False ) ->
+                left ++ "/" ++ right
 
-        ( True, True ) ->
-            left ++ String.dropLeft 1 right
+            ( True, True ) ->
+                left ++ String.dropLeft 1 right
 
-        _ ->
-            left ++ right
+            _ ->
+                left ++ right
 
 
 decodeItemList : EndPoint w e k v c p -> Decoder (List ( k, v ))
