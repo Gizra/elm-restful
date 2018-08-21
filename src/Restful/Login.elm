@@ -945,7 +945,7 @@ restful implementation.
 drupalConfig : AppConfig anonymousData user authenticatedData msg -> Config anonymousData user authenticatedData msg
 drupalConfig appConfig =
     { loginPath = "api/login-token"
-    , logoutPath = Just "user/logout"
+    , logoutPath = Nothing
     , userPath = "api/me"
     , decodeAccessToken = field "access_token" JD.string
     , decodeUser = appConfig.decodeUser
