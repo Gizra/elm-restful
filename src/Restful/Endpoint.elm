@@ -281,7 +281,7 @@ For a pre-built version that handles how Drupal sends responses with its
 Restful module, see `withDrupalItems`.
 
 -}
-withItems : (Decoder a -> Decoder a) -> (Decoder a -> Decoder (List a)) -> Backend b -> Backend a
+--withItems : (Decoder a -> Decoder a) -> (Decoder a -> Decoder (List a)) -> Backend b -> Backend a
 withItems decodeSingleItem decodeMultipleItems (Backend backend_) =
     Backend
         { backend_
@@ -316,7 +316,7 @@ So, this is equivalent to something like:
         (field "data" << list)
 
 -}
-withDrupalItems : Backend a -> Backend b
+--withDrupalItems : Backend a -> Backend b
 withDrupalItems =
     withItems decodeSingleDrupalEntity decodeDrupalList
 
@@ -333,7 +333,7 @@ So, this is equivalent to:
     withItems identity Json.Decode.list
 
 -}
-withPlainItems : Backend a -> Backend b
+--withPlainItems : Backend a -> Backend b
 withPlainItems =
     withItems identity list
 
@@ -444,7 +444,7 @@ If you don't use a special `created` type, then we'll POST with your `value`
 encoder.
 
 -}
-withCreatedEncoder : (created -> Value) -> ReadWriteEndPoint e k v c p -> ReadWriteEndPoint e k v created p
+withCreatedEncoder : (created -> Value) -> ReadWriteEndPoint e k v created p -> ReadWriteEndPoint e k v created p
 withCreatedEncoder encodeCreatedValue (EndPoint endpoint_) =
     EndPoint { endpoint_ | encodeCreatedValue = encodeCreatedValue }
 
@@ -457,7 +457,7 @@ By default, we use `identity` (that is, by default, our error type is
 helpful type.
 
 -}
-withErrorDecoder : (Error -> error) -> EndPoint w e k v c p -> EndPoint w error k v c p
+withErrorDecoder : (Error -> error) -> EndPoint w error k v c p -> EndPoint w error k v c p
 withErrorDecoder mapError (EndPoint endpoint_) =
     EndPoint { endpoint_ | mapError = mapError }
 
@@ -505,7 +505,8 @@ apply `withValueEncoder` to the result.
 -}
 drupalEndpoint : String -> Decoder value -> ReadOnlyEndPoint Error (EntityId a) value p
 drupalEndpoint path decodeValue =
-    endpoint path (decodeDrupalId toEntityId) decodeValue drupalBackend
+    endpoint path (decodeDrupalId toEntityId) decodeValue (String.fromInt << fromEntityId ) drupalBackend
+
         |> withKeyEncoder (fromEntityId >> String.fromInt)
 
 
@@ -523,8 +524,8 @@ drupalEndpoint path decodeValue =
 To turn this into a `ReadWriteEndpoint`, apply `withValueEncoder` to the result.
 
 -}
-endpoint : String -> Decoder key -> Decoder value -> Backend ( key, value ) -> ReadOnlyEndPoint Error key value p
-endpoint path decodeKey decodeValue backend_ =
+endpoint : String -> Decoder key -> Decoder value -> (key -> String) -> Backend ( key, value ) -> ReadOnlyEndPoint Error key value p
+endpoint path decodeKey decodeValue keyToUrlPartFunc backend_ =
     EndPoint
         { backend = unwrapBackend backend_
         , decodeKey = decodeKey
@@ -532,7 +533,7 @@ endpoint path decodeKey decodeValue backend_ =
         , encodeCreatedValue = encodeEmptyObject
         , encodeParams = encodeEmptyParams
         , encodeValue = encodeEmptyObject
-        , keyToUrlPart = String.fromInt
+        , keyToUrlPart = keyToUrlPartFunc
         , mapError = identity
         , path = path
         }
@@ -1159,8 +1160,7 @@ encodeEntityUuid =
 urlForKey : BackendUrl -> EndPoint w e k v c p -> k -> String
 urlForKey backendUrl (EndPoint endpoint_) key =
     appendUrl backendUrl endpoint_.path
-        |> appendUrl endpoint_.keyToUrlPart
-        |> appendUrl key
+        |> appendUrl (endpoint_.keyToUrlPart  key)
 
 
 urlForManyKeys : BackendUrl -> EndPoint w e k v c p -> List k -> String
@@ -1179,8 +1179,8 @@ decodeInt : Decoder Int
 decodeInt =
     JD.oneOf
         [ JD.int
-        , JD.string
-            |> JD.map String.toInt
-            |> JD.andThen JD.succeed
+--        , JD.string
+--            |> JD.map String.toInt
+--            |> JD.andThen (\val -> JD.succeed val)
         ]
 
