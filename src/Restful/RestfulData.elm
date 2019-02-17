@@ -1,4 +1,4 @@
-module Restful.RestfulData exposing (..)
+module Restful.RestfulData exposing (CrudRequest(..), RestfulData(..), backend, current, edit, editor, enableEditing, enableSave, failure, pending, request, succeed)
 
 {-| When dealing wih values that are edited and persisted to a backend, (or
 values derived from such values), there is a cluster of concerns that one has.

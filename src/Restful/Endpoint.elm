@@ -1,73 +1,24 @@
-module Restful.Endpoint
-    exposing
-        ( (</>)
-        , AccessToken
-        , Backend
-        , BackendUrl
-        , CrudOperations
-        , CrudRequest
-        , EndPoint
-        , EntityId
-        , EntityUuid
-        , Offset
-        , QueryResult
-        , Range
-        , ReadOnly
-        , ReadOnlyEndPoint
-        , ReadWrite
-        , ReadWriteEndPoint
-        , TokenStrategy
-        , applyAccessToken
-        , applyBackendUrl
-        , backend
-        , decodeEntityId
-        , decodeEntityUuid
-        , decodeSingleDrupalEntity
-        , delete
-        , drupalBackend
-        , drupalEndpoint
-        , encodeEntityId
-        , encodeEntityUuid
-        , endpoint
-        , fromEntityId
-        , fromEntityUuid
-        , get
-        , getMany
-        , modifyRequest
-        , patch
-        , patchAny
-        , patchFull
-        , post
-        , put
-        , select
-        , selectRange
-        , toCmd
-        , toCmdMaybe
-        , toEntityId
-        , toEntityUuid
-        , toTask
-        , toTaskMaybe
-        , tokenHeader
-        , tokenUrlParam
-        , withAccessToken
-        , withBackend
-        , withCountDecoder
-        , withCreatedEncoder
-        , withDrupalCountDecoder
-        , withDrupalItems
-        , withErrorDecoder
-        , withItems
-        , withKeyEncoder
-        , withManyKeys
-        , withOffsetParam
-        , withParamsEncoder
-        , withPath
-        , withPlainItems
-        , withRangeParam
-        , withTokenStrategy
-        , withValueEncoder
-        , withoutDecoder
-        )
+module Restful.Endpoint exposing
+    ( Backend, backend, drupalBackend
+    , withItems, withDrupalItems, withPlainItems
+    , withCountDecoder, withDrupalCountDecoder
+    , withOffsetParam, withRangeParam
+    , withManyKeys
+    , withTokenStrategy
+    , ReadOnly, ReadWrite
+    , EndPoint, ReadOnlyEndPoint, ReadWriteEndPoint
+    , drupalEndpoint, endpoint
+    , withBackend, withKeyEncoder, withValueEncoder, withCreatedEncoder, withParamsEncoder, withErrorDecoder, withPath
+    , AccessToken, TokenStrategy, tokenHeader, tokenUrlParam
+    , BackendUrl, Offset, Range, QueryResult
+    , get, getMany, select, selectRange, patch, patchAny, patchFull, post, put, delete
+    , CrudOperations, applyBackendUrl, applyAccessToken
+    , CrudRequest, withAccessToken, withoutDecoder, modifyRequest
+    , toTask, toTaskMaybe, toCmd, toCmdMaybe
+    , EntityId, decodeEntityId, encodeEntityId, fromEntityId, toEntityId
+    , EntityUuid, decodeEntityUuid, encodeEntityUuid, fromEntityUuid, toEntityUuid
+    , appendUrl, decodeSingleDrupalEntity
+    )
 
 {-| These functions and types are intended to facilitate CRUD operations upon
 backend entities exposed through a Restful HTTP API.
@@ -121,16 +72,16 @@ backend entities exposed through a Restful HTTP API.
 
 ## Helpers
 
-@docs (</>), decodeSingleDrupalEntity
+@docs appendUrl, decodeSingleDrupalEntity
 
 -}
 
-import Gizra.Json exposing (decodeInt)
 import Http exposing (Error(..), expectJson)
 import HttpBuilder exposing (..)
 import Json.Decode as JD exposing (Decoder, field, index, list)
 import Json.Encode exposing (Value)
 import Task exposing (Task)
+
 
 
 {-| The base URL for a backend (i.e. the part that doesn't vary from
@@ -269,8 +220,8 @@ type alias BackendRec a =
 
 
 unwrapBackend : Backend a -> BackendRec a
-unwrapBackend (Backend backend) =
-    backend
+unwrapBackend (Backend backend_) =
+    backend_
 
 
 {-| Constructs a default `Backend`.
@@ -331,9 +282,9 @@ Restful module, see `withDrupalItems`.
 
 -}
 withItems : (Decoder a -> Decoder a) -> (Decoder a -> Decoder (List a)) -> Backend b -> Backend a
-withItems decodeSingleItem decodeMultipleItems (Backend backend) =
+withItems decodeSingleItem decodeMultipleItems (Backend backend_) =
     Backend
-        { backend
+        { backend_
             | decodeSingleItem = decodeSingleItem
             , decodeMultipleItems = decodeMultipleItems
         }
@@ -347,8 +298,8 @@ putting a comma between each key.
 
 -}
 withManyKeys : (List String -> String) -> Backend a -> Backend a
-withManyKeys manyKeys (Backend backend) =
-    Backend { backend | manyKeys = manyKeys }
+withManyKeys manyKeys (Backend backend_) =
+    Backend { backend_ | manyKeys = manyKeys }
 
 
 {-| Unwrap items the Drupal way, as sent by its Restful module.
@@ -392,8 +343,8 @@ total count of all the items on the backend? (They may not all necessarily have
 been returned, due to paging).
 -}
 withCountDecoder : Decoder Int -> Backend a -> Backend a
-withCountDecoder decodeCount (Backend backend) =
-    Backend { backend | decodeCount = decodeCount }
+withCountDecoder decodeCount (Backend backend_) =
+    Backend { backend_ | decodeCount = decodeCount }
 
 
 {-| Decode the item count the Drupal way, by looking at a field named `count`.
@@ -410,8 +361,8 @@ By default, we use "offset".
 
 -}
 withOffsetParam : String -> Backend a -> Backend a
-withOffsetParam offsetParam (Backend backend) =
-    Backend { backend | offsetParam = offsetParam }
+withOffsetParam offsetParam (Backend backend_) =
+    Backend { backend_ | offsetParam = offsetParam }
 
 
 {-| What is the name of the query parameter this backend uses to specify how
@@ -421,8 +372,8 @@ By default, we use "range".
 
 -}
 withRangeParam : String -> Backend a -> Backend a
-withRangeParam rangeParam (Backend backend) =
-    Backend { backend | rangeParam = rangeParam }
+withRangeParam rangeParam (Backend backend_) =
+    Backend { backend_ | rangeParam = rangeParam }
 
 
 {-| Use the supplied token strategy for this backend.
@@ -431,15 +382,15 @@ You can use `tokenHeader` or `tokenUrlParam` to construct a `TokenStrategy`.
 
 -}
 withTokenStrategy : TokenStrategy -> Backend a -> Backend a
-withTokenStrategy tokenStrategy (Backend backend) =
-    Backend { backend | tokenStrategy = tokenStrategy }
+withTokenStrategy tokenStrategy (Backend backend_) =
+    Backend { backend_ | tokenStrategy = tokenStrategy }
 
 
 {-| Use the supplied backend with the endpoint.
 -}
 withBackend : Backend ( k, v ) -> EndPoint w e k v c p -> EndPoint w e k v c p
-withBackend (Backend backend) (EndPoint endpoint) =
-    EndPoint { endpoint | backend = backend }
+withBackend (Backend backend_) (EndPoint endpoint_) =
+    EndPoint { endpoint_ | backend = backend_ }
 
 
 {-| Use the supplied function to convert your `params` type into something we can feed to
@@ -454,8 +405,8 @@ This is how you would implement sorting or filtering, by:
 
 -}
 withParamsEncoder : (params -> List ( String, String )) -> EndPoint w e k v c p -> EndPoint w e k v c params
-withParamsEncoder encodeParams (EndPoint endpoint) =
-    EndPoint { endpoint | encodeParams = encodeParams }
+withParamsEncoder encodeParams (EndPoint endpoint_) =
+    EndPoint { endpoint_ | encodeParams = encodeParams }
 
 
 {-| Use the supplied function to convert your `key` type to a string we can append
@@ -463,8 +414,8 @@ to the URL for a `get` request. By default, we just use `toString`, but you may 
 to something else, depending on your `key` type.
 -}
 withKeyEncoder : (key -> String) -> EndPoint w e key v c p -> EndPoint w e key v c p
-withKeyEncoder keyToUrlPart (EndPoint endpoint) =
-    EndPoint { endpoint | keyToUrlPart = keyToUrlPart }
+withKeyEncoder keyToUrlPart (EndPoint endpoint_) =
+    EndPoint { endpoint_ | keyToUrlPart = keyToUrlPart }
 
 
 {-| Use the supplied function to encode your `value` type when writing to the backend.
@@ -474,9 +425,9 @@ after this function. Otherwise, we'll use this function for both `PUT` and `POST
 
 -}
 withValueEncoder : (value -> Value) -> ReadOnlyEndPoint e k value p -> ReadWriteEndPoint e k value value p
-withValueEncoder encodeValue (EndPoint endpoint) =
+withValueEncoder encodeValue (EndPoint endpoint_) =
     EndPoint
-        { endpoint
+        { endpoint_
             | encodeValue = encodeValue
             , encodeCreatedValue = encodeValue
         }
@@ -494,8 +445,8 @@ encoder.
 
 -}
 withCreatedEncoder : (created -> Value) -> ReadWriteEndPoint e k v c p -> ReadWriteEndPoint e k v created p
-withCreatedEncoder encodeCreatedValue (EndPoint endpoint) =
-    EndPoint { endpoint | encodeCreatedValue = encodeCreatedValue }
+withCreatedEncoder encodeCreatedValue (EndPoint endpoint_) =
+    EndPoint { endpoint_ | encodeCreatedValue = encodeCreatedValue }
 
 
 {-| Use the supplied function to convert an `Http.Error` to your desired
@@ -507,8 +458,8 @@ helpful type.
 
 -}
 withErrorDecoder : (Error -> error) -> EndPoint w e k v c p -> EndPoint w error k v c p
-withErrorDecoder mapError (EndPoint endpoint) =
-    EndPoint { endpoint | mapError = mapError }
+withErrorDecoder mapError (EndPoint endpoint_) =
+    EndPoint { endpoint_ | mapError = mapError }
 
 
 {-| Use the supplied `path` for this endpoint.
@@ -517,8 +468,8 @@ The path is appenend to whatever you supply for the `BackendUrl` for a request.
 
 -}
 withPath : String -> EndPoint w e k v c p -> EndPoint w e k v c p
-withPath path (EndPoint endpoint) =
-    EndPoint { endpoint | path = path }
+withPath path (EndPoint endpoint_) =
+    EndPoint { endpoint_ | path = path }
 
 
 {-| Construct a Drupal-oriented endpoint, with as many defaults filled in as possible.
@@ -555,7 +506,7 @@ apply `withValueEncoder` to the result.
 drupalEndpoint : String -> Decoder value -> ReadOnlyEndPoint Error (EntityId a) value p
 drupalEndpoint path decodeValue =
     endpoint path (decodeDrupalId toEntityId) decodeValue drupalBackend
-        |> withKeyEncoder (fromEntityId >> toString)
+        |> withKeyEncoder (fromEntityId >> String.fromInt)
 
 
 {-| Produces an `EndPoint` which you may then customize further.
@@ -573,9 +524,9 @@ To turn this into a `ReadWriteEndpoint`, apply `withValueEncoder` to the result.
 
 -}
 endpoint : String -> Decoder key -> Decoder value -> Backend ( key, value ) -> ReadOnlyEndPoint Error key value p
-endpoint path decodeKey decodeValue backend =
+endpoint path decodeKey decodeValue backend_ =
     EndPoint
-        { backend = unwrapBackend backend
+        { backend = unwrapBackend backend_
         , decodeKey = decodeKey
         , decodeValue = decodeValue
         , encodeCreatedValue = encodeEmptyObject
@@ -622,25 +573,27 @@ tokenUrlParam =
 
 {-| Appends the second parameter to the first, joining them with a "/", but avoiding "//".
 
-    "http://www.apple.com"  </> "path"  --> "http://www.apple.com/path"
+    "http://www.apple.com" appendUrl "path" --> "http://www.apple.com/path"
 
-    "http://www.apple.com"  </> "/path" --> "http://www.apple.com/path"
+    "http://www.apple.com" appendUrl "/path" --> "http://www.apple.com/path"
 
-    "http://www.apple.com/" </> "path"  --> "http://www.apple.com/path"
+    "http://www.apple.com/" appendUrl "path" --> "http://www.apple.com/path"
 
-    "http://www.apple.com/" </> "/path" --> "http://www.apple.com/path"
+    "http://www.apple.com/" appendUrl "/path" --> "http://www.apple.com/path"
 
-    "" </> "path" --> "path"
+    "" appendUrl "path" --> "path"
 
-    "http://www.apple.com/path" </> "" --> "http://www.apple.com/path"
+    "http://www.apple.com/path" appendUrl "" --> "http://www.apple.com/path"
 
 -}
-(</>) : String -> String -> String
-(</>) left right =
+appendUrl : String -> String -> String
+appendUrl left right =
     if String.isEmpty left then
         right
+
     else if String.isEmpty right then
         left
+
     else
         case ( String.endsWith "/" left, String.startsWith "/" right ) of
             ( False, False ) ->
@@ -654,37 +607,37 @@ tokenUrlParam =
 
 
 decodeItemList : EndPoint w e k v c p -> Decoder (List ( k, v ))
-decodeItemList (EndPoint endpoint) =
-    JD.map2 (,) endpoint.decodeKey endpoint.decodeValue
-        |> endpoint.backend.decodeMultipleItems
+decodeItemList (EndPoint endpoint_) =
+    JD.map2 (\a b -> ( a, b )) endpoint_.decodeKey endpoint_.decodeValue
+        |> endpoint_.backend.decodeMultipleItems
 
 
 expectMany : EndPoint w e k v c p -> RequestBuilder a -> RequestBuilder (List ( k, v ))
-expectMany ((EndPoint endpoint) as ep) =
+expectMany ((EndPoint endpoint_) as ep) =
     decodeItemList ep
         |> expectJson
         |> withExpect
 
 
 expectMultiple : EndPoint w e k v c p -> p -> Int -> RequestBuilder a -> RequestBuilder (QueryResult k v p)
-expectMultiple ((EndPoint endpoint) as ep) params offset =
-    JD.map2 (QueryResult params offset) (decodeItemList ep) endpoint.backend.decodeCount
+expectMultiple ((EndPoint endpoint_) as ep) params offset =
+    JD.map2 (QueryResult params offset) (decodeItemList ep) endpoint_.backend.decodeCount
         |> expectJson
         |> withExpect
 
 
 expectSingle : EndPoint w e k v c p -> RequestBuilder a -> RequestBuilder ( k, v )
-expectSingle (EndPoint endpoint) =
-    JD.map2 (,) endpoint.decodeKey endpoint.decodeValue
-        |> endpoint.backend.decodeSingleItem
+expectSingle (EndPoint endpoint_) =
+    JD.map2 (\a b -> ( a, b )) endpoint_.decodeKey endpoint_.decodeValue
+        |> endpoint_.backend.decodeSingleItem
         |> expectJson
         |> withExpect
 
 
 expectSingleWithKey : EndPoint w e k v c p -> k -> RequestBuilder a -> RequestBuilder v
-expectSingleWithKey (EndPoint endpoint) key =
-    JD.map2 (,) (JD.succeed key) endpoint.decodeValue
-        |> endpoint.backend.decodeSingleItem
+expectSingleWithKey (EndPoint endpoint_) key =
+    JD.map2 (\a b -> ( a, b )) (JD.succeed key) endpoint_.decodeValue
+        |> endpoint_.backend.decodeSingleItem
         |> JD.map Tuple.second
         |> expectJson
         |> withExpect
@@ -792,6 +745,7 @@ toTaskMaybe (CrudRequest mapError _ builder) =
                     BadStatus response ->
                         if response.status.code == 404 then
                             Task.succeed Nothing
+
                         else
                             Task.fail (mapError err)
 
@@ -816,11 +770,11 @@ type alias QueryResult key value params =
 {-| Select entities from an endpoint.
 -}
 select : BackendUrl -> EndPoint w error key value c params -> params -> CrudRequest error (QueryResult key value params)
-select backendUrl ((EndPoint endpoint) as ep) params =
-    HttpBuilder.get (backendUrl </> endpoint.path)
-        |> withQueryParams (endpoint.encodeParams params)
+select backendUrl ((EndPoint endpoint_) as ep) params =
+    HttpBuilder.get (appendUrl backendUrl endpoint_.path)
+        |> withQueryParams (endpoint_.encodeParams params)
         |> expectMultiple ep params 0
-        |> CrudRequest endpoint.mapError endpoint.backend.tokenStrategy
+        |> CrudRequest endpoint_.mapError endpoint_.backend.tokenStrategy
 
 
 {-| A zero-based offset that you would like the backend to start from.
@@ -836,16 +790,17 @@ type alias Range =
 
 
 withOffsetAndRange : BackendRec a -> Offset -> Maybe Range -> RequestBuilder b -> RequestBuilder b
-withOffsetAndRange backend offset range =
+withOffsetAndRange backend_ offset range =
     let
         offsetParam =
             if offset == 0 then
                 Nothing
+
             else
-                Just ( backend.offsetParam, toString offset )
+                Just ( backend_.offsetParam, String.fromInt offset )
 
         rangeParam =
-            Maybe.map (\r -> ( backend.rangeParam, toString r )) range
+            Maybe.map (\r -> ( backend_.rangeParam, String.fromInt r )) range
     in
     [ offsetParam, rangeParam ]
         |> List.filterMap identity
@@ -859,12 +814,12 @@ of items to fetch.
 
 -}
 selectRange : BackendUrl -> EndPoint w error key value c params -> params -> Offset -> Maybe Range -> CrudRequest error (QueryResult key value params)
-selectRange backendUrl ((EndPoint endpoint) as ep) params offset range =
-    HttpBuilder.get (backendUrl </> endpoint.path)
-        |> withQueryParams (endpoint.encodeParams params)
-        |> withOffsetAndRange endpoint.backend offset range
+selectRange backendUrl ((EndPoint endpoint_) as ep) params offset range =
+    HttpBuilder.get (appendUrl backendUrl endpoint_.path)
+        |> withQueryParams (endpoint_.encodeParams params)
+        |> withOffsetAndRange endpoint_.backend offset range
         |> expectMultiple ep params offset
-        |> CrudRequest endpoint.mapError endpoint.backend.tokenStrategy
+        |> CrudRequest endpoint_.mapError endpoint_.backend.tokenStrategy
 
 
 {-| Gets a entity from the backend via its `key`.
@@ -875,32 +830,32 @@ can use `toTaskMaybe` or `toCmdMaybe` with the resulting `CrudRequest`.
 
 -}
 get : BackendUrl -> EndPoint w error key value c p -> key -> CrudRequest error value
-get backendUrl ((EndPoint endpoint) as ep) key =
+get backendUrl ((EndPoint endpoint_) as ep) key =
     urlForKey backendUrl ep key
         |> HttpBuilder.get
         |> expectSingleWithKey ep key
-        |> CrudRequest endpoint.mapError endpoint.backend.tokenStrategy
+        |> CrudRequest endpoint_.mapError endpoint_.backend.tokenStrategy
 
 
 {-| Gets several entities from the backend via multiple `key`s.
 -}
 getMany : BackendUrl -> EndPoint w error key value c p -> List key -> CrudRequest error (List ( key, value ))
-getMany backendUrl ((EndPoint endpoint) as ep) keys =
+getMany backendUrl ((EndPoint endpoint_) as ep) keys =
     urlForManyKeys backendUrl ep keys
         |> HttpBuilder.get
         |> expectMany ep
-        |> CrudRequest endpoint.mapError endpoint.backend.tokenStrategy
+        |> CrudRequest endpoint_.mapError endpoint_.backend.tokenStrategy
 
 
 {-| Sends a `POST` request to create the specified value.
 -}
 post : BackendUrl -> ReadWriteEndPoint error key value created p -> created -> CrudRequest error ( key, value )
-post backendUrl ((EndPoint endpoint) as ep) created =
-    (backendUrl </> endpoint.path)
+post backendUrl ((EndPoint endpoint_) as ep) created =
+    appendUrl backendUrl endpoint_.path
         |> HttpBuilder.post
         |> expectSingle ep
-        |> withJsonBody (endpoint.encodeCreatedValue created)
-        |> CrudRequest endpoint.mapError endpoint.backend.tokenStrategy
+        |> withJsonBody (endpoint_.encodeCreatedValue created)
+        |> CrudRequest endpoint_.mapError endpoint_.backend.tokenStrategy
 
 
 {-| Sends a `PUT` request to create the specified value.
@@ -913,12 +868,12 @@ If you want to send the full value, but use the `PATCH` HTTP method, see
 
 -}
 put : BackendUrl -> ReadWriteEndPoint error key value c p -> key -> value -> CrudRequest error value
-put backendUrl ((EndPoint endpoint) as ep) key value =
+put backendUrl ((EndPoint endpoint_) as ep) key value =
     urlForKey backendUrl ep key
         |> HttpBuilder.put
         |> expectSingleWithKey ep key
-        |> withJsonBody (endpoint.encodeValue value)
-        |> CrudRequest endpoint.mapError endpoint.backend.tokenStrategy
+        |> withJsonBody (endpoint_.encodeValue value)
+        |> CrudRequest endpoint_.mapError endpoint_.backend.tokenStrategy
 
 
 {-| Sends a `PATCH` request for the specified key and value, using the encoder
@@ -936,8 +891,8 @@ can apply `withoutDecoder` to the result.
 
 -}
 patch : BackendUrl -> ReadWriteEndPoint error key value c p -> key -> value -> (value -> Value) -> CrudRequest error value
-patch backendUrl endpoint key value encoder =
-    patchAny backendUrl endpoint key (encoder value)
+patch backendUrl endpoint_ key value encoder =
+    patchAny backendUrl endpoint_ key (encoder value)
 
 
 {-| Sends a `PATCH` request for the specified key and value, using the encoder
@@ -955,8 +910,8 @@ can apply `withoutDecoder` to the result.
 
 -}
 patchFull : BackendUrl -> ReadWriteEndPoint error key value c p -> key -> value -> CrudRequest error value
-patchFull backendUrl ((EndPoint endpoint) as ep) key value =
-    patch backendUrl ep key value endpoint.encodeValue
+patchFull backendUrl ((EndPoint endpoint_) as ep) key value =
+    patch backendUrl ep key value endpoint_.encodeValue
 
 
 {-| Sends a `PATCH` request for the specified key, using an arbitrary JSON `Value`
@@ -974,12 +929,12 @@ can apply `withoutDecoder` to the result.
 
 -}
 patchAny : BackendUrl -> ReadWriteEndPoint error key value c p -> key -> Value -> CrudRequest error value
-patchAny backendUrl ((EndPoint endpoint) as ep) key json =
+patchAny backendUrl ((EndPoint endpoint_) as ep) key json =
     urlForKey backendUrl ep key
         |> HttpBuilder.patch
         |> expectSingleWithKey ep key
         |> withJsonBody json
-        |> CrudRequest endpoint.mapError endpoint.backend.tokenStrategy
+        |> CrudRequest endpoint_.mapError endpoint_.backend.tokenStrategy
 
 
 {-| Delete entity.
@@ -989,10 +944,10 @@ on the resulting `CrudRequest`.
 
 -}
 delete : BackendUrl -> EndPoint w error key v c p -> key -> CrudRequest error ()
-delete backendUrl ((EndPoint endpoint) as ep) key =
+delete backendUrl ((EndPoint endpoint_) as ep) key =
     urlForKey backendUrl ep key
         |> HttpBuilder.delete
-        |> CrudRequest endpoint.mapError endpoint.backend.tokenStrategy
+        |> CrudRequest endpoint_.mapError endpoint_.backend.tokenStrategy
 
 
 decodeDrupalId : (Int -> a) -> Decoder a
@@ -1202,15 +1157,30 @@ encodeEntityUuid =
 
 
 urlForKey : BackendUrl -> EndPoint w e k v c p -> k -> String
-urlForKey backendUrl (EndPoint endpoint) key =
-    backendUrl </> endpoint.path </> endpoint.keyToUrlPart key
+urlForKey backendUrl (EndPoint endpoint_) key =
+    appendUrl backendUrl endpoint_.path
+        |> appendUrl endpoint_.keyToUrlPart
+        |> appendUrl key
 
 
 urlForManyKeys : BackendUrl -> EndPoint w e k v c p -> List k -> String
-urlForManyKeys backendUrl (EndPoint endpoint) keys =
+urlForManyKeys backendUrl (EndPoint endpoint_) keys =
     let
         ids =
-            List.map endpoint.keyToUrlPart keys
-                |> endpoint.backend.manyKeys
+            List.map endpoint_.keyToUrlPart keys
+                |> endpoint_.backend.manyKeys
     in
-    backendUrl </> endpoint.path </> ids
+    appendUrl backendUrl endpoint_.path
+        |> appendUrl ids
+
+{-| Cast String to Int.
+-}
+decodeInt : Decoder Int
+decodeInt =
+    JD.oneOf
+        [ JD.int
+        , JD.string
+            |> JD.map String.toInt
+            |> JD.andThen JD.succeed
+        ]
+
