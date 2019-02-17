@@ -404,7 +404,7 @@ This is how you would implement sorting or filtering, by:
 `endpoint` and `drupalEndpoint` both default this to `always []` (i.e. no params)
 
 -}
-withParamsEncoder : (params -> List ( String, String )) -> EndPoint w e k v c p -> EndPoint w e k v c params
+withParamsEncoder : (params -> List ( String, String )) -> EndPoint w e k v c params -> EndPoint w e k v c params
 withParamsEncoder encodeParams (EndPoint endpoint_) =
     EndPoint { endpoint_ | encodeParams = encodeParams }
 
