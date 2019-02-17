@@ -1179,8 +1179,11 @@ decodeInt : Decoder Int
 decodeInt =
     JD.oneOf
         [ JD.int
---        , JD.string
---            |> JD.map String.toInt
---            |> JD.andThen (\val -> JD.succeed val)
+        , JD.string
+            |> JD.andThen (\str ->
+            case  String.toInt str of
+                Just val -> JD.succeed val
+                Nothing -> JD.fail "Cannot decode `String` to `Int`"
+            )
         ]
 
