@@ -532,7 +532,7 @@ endpoint path decodeKey decodeValue backend_ =
         , encodeCreatedValue = encodeEmptyObject
         , encodeParams = encodeEmptyParams
         , encodeValue = encodeEmptyObject
-        , keyToUrlPart = toString
+        , keyToUrlPart = String.fromInt
         , mapError = identity
         , path = path
         }
