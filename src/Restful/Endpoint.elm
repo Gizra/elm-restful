@@ -83,7 +83,6 @@ import Json.Encode exposing (Value)
 import Task exposing (Task)
 
 
-
 {-| The base URL for a backend (i.e. the part that doesn't vary from
 one endpoint to another).
 -}
@@ -281,7 +280,12 @@ For a pre-built version that handles how Drupal sends responses with its
 Restful module, see `withDrupalItems`.
 
 -}
+
+
+
 --withItems : (Decoder a -> Decoder a) -> (Decoder a -> Decoder (List a)) -> Backend b -> Backend a
+
+
 withItems decodeSingleItem decodeMultipleItems (Backend backend_) =
     Backend
         { backend_
@@ -316,7 +320,12 @@ So, this is equivalent to something like:
         (field "data" << list)
 
 -}
+
+
+
 --withDrupalItems : Backend a -> Backend b
+
+
 withDrupalItems =
     withItems decodeSingleDrupalEntity decodeDrupalList
 
@@ -333,7 +342,12 @@ So, this is equivalent to:
     withItems identity Json.Decode.list
 
 -}
+
+
+
 --withPlainItems : Backend a -> Backend b
+
+
 withPlainItems =
     withItems identity list
 
@@ -427,9 +441,15 @@ after this function. Otherwise, we'll use this function for both `PUT` and `POST
 withValueEncoder : (value -> Value) -> ReadOnlyEndPoint e k value p -> ReadWriteEndPoint e k value value p
 withValueEncoder encodeValue (EndPoint endpoint_) =
     EndPoint
-        { endpoint_
-            | encodeValue = encodeValue
-            , encodeCreatedValue = encodeValue
+        { backend = endpoint_.backend
+        , decodeKey = endpoint_.decodeKey
+        , decodeValue = endpoint_.decodeValue
+        , encodeCreatedValue = encodeValue
+        , encodeParams = endpoint_.encodeParams
+        , encodeValue = encodeValue
+        , keyToUrlPart = endpoint_.keyToUrlPart
+        , mapError = endpoint_.mapError
+        , path = endpoint_.path
         }
 
 
@@ -443,10 +463,23 @@ them as part of a POST request.
 If you don't use a special `created` type, then we'll POST with your `value`
 encoder.
 
+As we change the field type of `encodeCreatedValue`, we have to use the constructor for this.
+@see <https://github.com/elm/compiler/blob/master/upgrade-docs/0.19.md#stricter-record-update-syntax>
+
 -}
-withCreatedEncoder : (created -> Value) -> ReadWriteEndPoint e k v created p -> ReadWriteEndPoint e k v created p
+withCreatedEncoder : (created -> Value) -> ReadWriteEndPoint e k v c p -> ReadWriteEndPoint e k v created p
 withCreatedEncoder encodeCreatedValue (EndPoint endpoint_) =
-    EndPoint { endpoint_ | encodeCreatedValue = encodeCreatedValue }
+    EndPoint
+        { backend = endpoint_.backend
+        , decodeKey = endpoint_.decodeKey
+        , decodeValue = endpoint_.decodeValue
+        , encodeCreatedValue = encodeCreatedValue
+        , encodeParams = endpoint_.encodeParams
+        , encodeValue = endpoint_.encodeValue
+        , keyToUrlPart = endpoint_.keyToUrlPart
+        , mapError = endpoint_.mapError
+        , path = endpoint_.path
+        }
 
 
 {-| Use the supplied function to convert an `Http.Error` to your desired
@@ -505,8 +538,7 @@ apply `withValueEncoder` to the result.
 -}
 drupalEndpoint : String -> Decoder value -> ReadOnlyEndPoint Error (EntityId a) value p
 drupalEndpoint path decodeValue =
-    endpoint path (decodeDrupalId toEntityId) decodeValue (String.fromInt << fromEntityId ) drupalBackend
-
+    endpoint path (decodeDrupalId toEntityId) decodeValue (String.fromInt << fromEntityId) drupalBackend
         |> withKeyEncoder (fromEntityId >> String.fromInt)
 
 
@@ -1160,7 +1192,7 @@ encodeEntityUuid =
 urlForKey : BackendUrl -> EndPoint w e k v c p -> k -> String
 urlForKey backendUrl (EndPoint endpoint_) key =
     appendUrl backendUrl endpoint_.path
-        |> appendUrl (endpoint_.keyToUrlPart  key)
+        |> appendUrl (endpoint_.keyToUrlPart key)
 
 
 urlForManyKeys : BackendUrl -> EndPoint w e k v c p -> List k -> String
@@ -1173,6 +1205,7 @@ urlForManyKeys backendUrl (EndPoint endpoint_) keys =
     appendUrl backendUrl endpoint_.path
         |> appendUrl ids
 
+
 {-| Cast String to Int.
 -}
 decodeInt : Decoder Int
@@ -1180,10 +1213,13 @@ decodeInt =
     JD.oneOf
         [ JD.int
         , JD.string
-            |> JD.andThen (\str ->
-            case  String.toInt str of
-                Just val -> JD.succeed val
-                Nothing -> JD.fail "Cannot decode `String` to `Int`"
-            )
-        ]
+            |> JD.andThen
+                (\str ->
+                    case String.toInt str of
+                        Just val ->
+                            JD.succeed val
 
+                        Nothing ->
+                            JD.fail "Cannot decode `String` to `Int`"
+                )
+        ]
