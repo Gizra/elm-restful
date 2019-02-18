@@ -1191,8 +1191,9 @@ encodeEntityUuid =
 
 urlForKey : BackendUrl -> EndPoint w e k v c p -> k -> String
 urlForKey backendUrl (EndPoint endpoint_) key =
-    appendUrl backendUrl endpoint_.path
-        |> appendUrl (endpoint_.keyToUrlPart key)
+    endpoint_.keyToUrlPart key
+        |> appendUrl endpoint_.path
+        |> appendUrl backendUrl
 
 
 urlForManyKeys : BackendUrl -> EndPoint w e k v c p -> List k -> String
