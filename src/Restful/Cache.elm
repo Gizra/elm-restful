@@ -1,27 +1,12 @@
-module Restful.Cache
-    exposing
-        ( Cache
-        , FetchRequest
-        , Msg
-        , Ranges
-        , ReadOnlyCache
-        , Values(..)
-        , allItemsLoaded
-        , empty
-        , fetchFrom
-        , forgetFetchErrors
-        , getFetchErrors
-        , getFetchRequests
-        , getParams
-        , getValues
-        , invalidate
-        , loaded
-        , mapParams
-        , setParams
-        , tryFetching
-        , update
-        , withPageSize
-        )
+module Restful.Cache exposing
+    ( Cache, ReadOnlyCache, empty, withPageSize
+    , getParams, setParams, mapParams
+    , invalidate
+    , Msg, fetchFrom, tryFetching
+    , update
+    , Values(..), Ranges, getValues, loaded, allItemsLoaded
+    , FetchRequest, getFetchRequests, getFetchErrors, forgetFetchErrors
+    )
 
 {-| Given an endpoint, manage data retrieved from that endpoint.
 
@@ -43,7 +28,7 @@ point, of course.
 
 -}
 
-import EveryDictList exposing (EveryDictList)
+import AssocList as Dict exposing (Dict)
 import IntDict exposing (IntDict)
 import List
 import Restful.Endpoint exposing (AccessToken, BackendUrl, CrudRequest, EndPoint, QueryResult, ReadOnly, selectRange, toCmd, withAccessToken)
@@ -141,7 +126,7 @@ emptyValues params =
 
 -}
 type alias Ranges k v p =
-    { items : IntDict (EveryDictList k v)
+    { items : IntDict (Dict k v)
     , count : Int
     , params : p
     }
@@ -153,7 +138,7 @@ loaded : Ranges k v p -> Int
 loaded ranges =
     let
         addSizes _ dict accum =
-            accum + EveryDictList.size dict
+            accum + Dict.size dict
     in
     IntDict.foldl addSizes 0 ranges.items
 
@@ -282,15 +267,18 @@ tryFetching offset range (Cache { values, fetchRequests, fetchErrors }) =
                         |> (\result ->
                                 if result.range > 0 then
                                     Just <| FetchFrom result.offset
+
                                 else
                                     Nothing
                            )
+
         else
             -- For now, just bail if there has been any error. Eventually,
             -- we should be more sophisticated about this, and see whether
             -- the error actually covers the requested range. Or, perhaps not ...
             -- I suppose it's unlikely that fetch errors will be range-dependent?
             Nothing
+
     else
         -- For now, only let one request be in-flight at a time. Eventually, we
         -- should be more sophisticated than this. Basically, the right
@@ -300,7 +288,7 @@ tryFetching offset range (Cache { values, fetchRequests, fetchErrors }) =
         Nothing
 
 
-applyItems : Int -> EveryDictList k v -> { offset : Int, range : Int } -> { offset : Int, range : Int }
+applyItems : Int -> Dict k v -> { offset : Int, range : Int } -> { offset : Int, range : Int }
 applyItems index list accum =
     if accum.range > 0 then
         if index > accum.offset then
@@ -308,19 +296,22 @@ applyItems index list accum =
             -- the range would extend past our offset ... if so, cut it down so
             -- that it doesn't.
             { accum | range = min accum.range (index - accum.offset) }
+
         else
             -- The data is at or to the left of our offset. So, the question is
             -- the extent of the overlap, if any.
             let
                 overlap =
-                    index + EveryDictList.length list - accum.offset
+                    index + Dict.size list - accum.offset
             in
             if overlap > 0 then
                 { offset = accum.offset + overlap
                 , range = accum.range - overlap
                 }
+
             else
                 accum
+
     else
         -- If we've reduced the range to zero, then we don't
         -- need to think any longer
@@ -343,6 +334,7 @@ setParams params ((Cache cacheRec) as cache) =
             if params == oldParams then
                 -- params not changed, so do nothing
                 cache
+
             else
                 -- Just subsitute the new params for the old, keeping
                 -- the old ranges if we have any.
@@ -352,6 +344,7 @@ setParams params ((Cache cacheRec) as cache) =
             if params == oldRanges.params then
                 -- params not changed, so do nothing
                 cache
+
             else
                 -- Use the new params, and save the old ranges
                 Cache { cacheRec | values = Pending params (Just oldRanges) }
@@ -371,7 +364,7 @@ mapParams func cache =
     cache
         |> getParams
         |> func
-        |> flip setParams cache
+        |> (\a -> setParams a cache)
 
 
 paramsFromValues : Values k v p -> p
@@ -456,6 +449,7 @@ update backendUrl accessToken msg ((Cache cacheRec) as cache) =
                             }
                         , Cmd.none
                         )
+
                     else
                         -- If the params don't match, just ignore the response.
                         ( Cache { cacheRec | fetchRequests = fetchRequests }
@@ -489,6 +483,7 @@ updateValues response values =
                     if query.count == data.count then
                         -- The count is the same, so integrate
                         Arrived { data | items = integrateQuery query data.items }
+
                     else
                         -- The count has changed, so we can't really trust any
                         -- of our old data ... just keep the new stuff.
@@ -501,7 +496,7 @@ Note that we don't assume that we're getting the same pageSize every time, or
 that our offsets are aligned.
 
 -}
-integrateQuery : QueryResult k v p -> IntDict (EveryDictList k v) -> IntDict (EveryDictList k v)
+integrateQuery : QueryResult k v p -> IntDict (Dict k v) -> IntDict (Dict k v)
 integrateQuery query ranges =
     -- So far, we're not consolidating ranges here ... that may or may not be a
     -- good idea at some point. Ultimately, a number of optimizations are likely
@@ -512,13 +507,14 @@ integrateQuery query ranges =
                 -- If we don't have more items to integrate, then just add this
                 -- one back in.
                 ( remaining, IntDict.insert offset values accum )
+
             else
                 let
                     sizeRemaining =
                         List.length remaining.items
 
                     sizeOfTheseValues =
-                        EveryDictList.length values
+                        Dict.size values
 
                     offsetIntoTheseValues =
                         remaining.offset - offset
@@ -529,13 +525,14 @@ integrateQuery query ranges =
                 if replaceInTheseValues <= 0 then
                     -- Nothing to replace here, so just add it back in
                     ( remaining, IntDict.insert offset values accum )
+
                 else
                     let
                         newValues =
-                            EveryDictList.concat
-                                [ EveryDictList.take offsetIntoTheseValues values
-                                , EveryDictList.fromList <| List.take replaceInTheseValues remaining.items
-                                , EveryDictList.drop (offsetIntoTheseValues + replaceInTheseValues) values
+                            Dict.concat
+                                [ Dict.take offsetIntoTheseValues values
+                                , Dict.fromList <| List.take replaceInTheseValues remaining.items
+                                , Dict.drop (offsetIntoTheseValues + replaceInTheseValues) values
                                 ]
                     in
                     ( { remaining
@@ -549,8 +546,9 @@ integrateQuery query ranges =
         |> (\( remaining, accum ) ->
                 if List.isEmpty remaining.items then
                     accum
+
                 else
-                    IntDict.insert remaining.offset (EveryDictList.fromList remaining.items) accum
+                    IntDict.insert remaining.offset (Dict.fromList remaining.items) accum
            )
 
 
@@ -559,7 +557,7 @@ integrateQuery query ranges =
 initialRange : QueryResult k v p -> Values k v p
 initialRange result =
     Arrived
-        { items = IntDict.singleton result.offset (EveryDictList.fromList result.items)
+        { items = IntDict.singleton result.offset (Dict.fromList result.items)
         , count = result.count
         , params = result.params
         }

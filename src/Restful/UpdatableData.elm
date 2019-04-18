@@ -1,4 +1,4 @@
-module Restful.UpdatableData exposing (..)
+module Restful.UpdatableData exposing (UpdatableData, UpdatableWebData, notAsked)
 
 {-| This is a simpler alternative to `RestfulData`. It handles cases where we
 want to track both a possible request to "fetch" some data and a possible

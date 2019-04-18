@@ -1,45 +1,18 @@
-module Restful.Login
-    exposing
-        ( AnonymousUser
-        , AppConfig
-        , AuthenticatedUser
-        , Config
-        , Credentials
-        , LoginError(..)
-        , LoginEvent(..)
-        , LoginMethod(..)
-        , LoginProgress(..)
-        , Msg
-        , UserAndData(..)
-        , accessTokenAccepted
-        , accessTokenRejected
-        , checkAccessToken
-        , checkCachedCredentials
-        , drupalConfig
-        , getData
-        , getError
-        , getLoginProgress
-        , getUser
-        , hasAccessToken
-        , hasValidAccessToken
-        , isAnonymousUser
-        , isAuthenticatedUser
-        , isChecking
-        , isCheckingAccessToken
-        , isCheckingPassword
-        , loggedIn
-        , loggedOut
-        , logout
-        , mapAnonymousData
-        , mapAuthenticatedData
-        , mapBoth
-        , maybeAnonymousData
-        , maybeAuthenticatedData
-        , recordLogin
-        , tryAccessToken
-        , tryLogin
-        , update
-        )
+module Restful.Login exposing
+    ( UserAndData(..), Credentials, AnonymousUser, AuthenticatedUser
+    , LoginProgress(..), LoginEvent(..), LoginMethod(..), LoginError(..)
+    , loggedOut, checkCachedCredentials, checkAccessToken, loggedIn
+    , tryLogin, tryAccessToken, recordLogin, logout
+    , Config, AppConfig, drupalConfig, Msg, update
+    , hasAccessToken, hasValidAccessToken
+    , accessTokenRejected, accessTokenAccepted
+    , getError, getLoginProgress
+    , getUser
+    , isAnonymousUser, isAuthenticatedUser
+    , isChecking, isCheckingAccessToken, isCheckingPassword
+    , maybeAnonymousData, maybeAuthenticatedData, getData
+    , mapAnonymousData, mapAuthenticatedData, mapBoth
+    )
 
 {-| This module models the state associated with the login process,
 but not the UI -- the idea is that the UI will vary more than the basic logic
@@ -209,7 +182,7 @@ import HttpBuilder exposing (withExpect, withHeader, withQueryParams)
 import Json.Decode as JD exposing (Decoder, field)
 import Json.Encode exposing (Value)
 import RemoteData exposing (RemoteData(..), WebData)
-import Restful.Endpoint exposing ((</>), AccessToken, BackendUrl)
+import Restful.Endpoint exposing (AccessToken, BackendUrl, appendUrl)
 import Task exposing (Task)
 
 
@@ -1042,6 +1015,7 @@ classifyHttpError retry method error =
         Http.BadStatus response ->
             if response.status.code == 401 then
                 Rejected method
+
             else
                 HttpError method error Nothing
 
@@ -1128,7 +1102,7 @@ update config msg model =
                     Base64.encode (name ++ ":" ++ password)
 
                 requestAccessToken =
-                    HttpBuilder.get (backendUrl </> config.loginPath)
+                    HttpBuilder.get (appendUrl backendUrl config.loginPath)
                         |> withHeader "Authorization" ("Basic " ++ credentials)
                         |> withQueryParams params
                         |> withExpect (expectJson config.decodeAccessToken)
@@ -1160,7 +1134,7 @@ update config msg model =
                             -- really logout unless we send a request to the
                             -- backend to do so.
                             ( Authenticated { authenticated | logout = Loading }
-                            , HttpBuilder.get (authenticated.credentials.backendUrl </> logoutPath)
+                            , HttpBuilder.get (appendUrl authenticated.credentials.backendUrl logoutPath)
                                 |> withQueryParams [ ( "access_token", authenticated.credentials.accessToken ) ]
                                 |> HttpBuilder.toTask
                                 |> Task.attempt HandleLogoutAttempt
@@ -1198,6 +1172,7 @@ update config msg model =
                                 Err (BadStatus response) ->
                                     if response.status.code == 403 then
                                         Ok ()
+
                                     else
                                         result
 
@@ -1223,7 +1198,7 @@ update config msg model =
 
 requestUser : Config anonymousData user authenticatedData msg -> String -> String -> Task Error (Credentials user)
 requestUser config backendUrl accessToken =
-    HttpBuilder.get (backendUrl </> config.userPath)
+    HttpBuilder.get (appendUrl backendUrl config.userPath)
         |> withQueryParams [ ( "access_token", accessToken ) ]
         |> withExpect (expectJson config.decodeUser)
         |> HttpBuilder.toTask
