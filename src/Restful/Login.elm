@@ -1,45 +1,18 @@
-module Restful.Login
-    exposing
-        ( AnonymousUser
-        , AppConfig
-        , AuthenticatedUser
-        , Config
-        , Credentials
-        , LoginError(..)
-        , LoginEvent(..)
-        , LoginMethod(..)
-        , LoginProgress(..)
-        , Msg
-        , UserAndData(..)
-        , accessTokenAccepted
-        , accessTokenRejected
-        , checkAccessToken
-        , checkCachedCredentials
-        , drupalConfig
-        , getData
-        , getError
-        , getLoginProgress
-        , getUser
-        , hasAccessToken
-        , hasValidAccessToken
-        , isAnonymousUser
-        , isAuthenticatedUser
-        , isChecking
-        , isCheckingAccessToken
-        , isCheckingPassword
-        , loggedIn
-        , loggedOut
-        , logout
-        , mapAnonymousData
-        , mapAuthenticatedData
-        , mapBoth
-        , maybeAnonymousData
-        , maybeAuthenticatedData
-        , recordLogin
-        , tryAccessToken
-        , tryLogin
-        , update
-        )
+module Restful.Login exposing
+    ( UserAndData(..), Credentials, AnonymousUser, AuthenticatedUser
+    , LoginProgress(..), LoginEvent(..), LoginMethod(..), LoginError(..)
+    , loggedOut, checkCachedCredentials, checkAccessToken, loggedIn
+    , tryLogin, tryOneTimeLogin, tryAccessToken, recordLogin, logout
+    , Config, AppConfig, drupalConfig, Msg, update
+    , hasAccessToken, hasValidAccessToken
+    , accessTokenRejected, accessTokenAccepted
+    , getError, getLoginProgress
+    , getUser
+    , isAnonymousUser, isAuthenticatedUser
+    , isChecking, isCheckingAccessToken, isCheckingPassword
+    , maybeAnonymousData, maybeAuthenticatedData, getData
+    , mapAnonymousData, mapAuthenticatedData, mapBoth
+    )
 
 {-| This module models the state associated with the login process,
 but not the UI -- the idea is that the UI will vary more than the basic logic
@@ -178,7 +151,7 @@ If this doesn't seem helpful, you can use a `()` for the `anonymousData` or
 
 ## Actions
 
-@docs tryLogin, tryAccessToken, recordLogin, logout
+@docs tryLogin, tryOneTimeLogin, tryAccessToken, recordLogin, logout
 
 
 ## Integration with your app
@@ -366,11 +339,23 @@ isCheckingPassword =
         >> Maybe.withDefault False
 
 
+{-| Are we waiting for the backend to respond to a request to check a one-time login?
+-}
+isCheckingOneTimeLogin : UserAndData anonymousData user authenticatedData -> Bool
+isCheckingOneTimeLogin =
+    getLoginProgress
+        >> Maybe.map loginProgressIsCheckingOneTimeLogin
+        >> Maybe.withDefault False
+
+
 loginProgressIsCheckingAccessToken : LoginProgress user -> Bool
 loginProgressIsCheckingAccessToken loginProgress =
     case loginProgress of
         Checking ByAccessToken ->
             True
+
+        Checking ByOneTimeLogin ->
+            False
 
         Checking ByPassword ->
             False
@@ -385,8 +370,27 @@ loginProgressIsCheckingPassword loginProgress =
         Checking ByAccessToken ->
             False
 
+        Checking ByOneTimeLogin ->
+            False
+
         Checking ByPassword ->
             True
+
+        LoginError _ ->
+            False
+
+
+loginProgressIsCheckingOneTimeLogin : LoginProgress user -> Bool
+loginProgressIsCheckingOneTimeLogin loginProgress =
+    case loginProgress of
+        Checking ByAccessToken ->
+            False
+
+        Checking ByOneTimeLogin ->
+            True
+
+        Checking ByPassword ->
+            False
 
         LoginError _ ->
             False
@@ -548,6 +552,7 @@ a username and password?
 -}
 type LoginMethod
     = ByAccessToken
+    | ByOneTimeLogin
     | ByPassword
 
 
@@ -915,6 +920,7 @@ The fields have the following meanings.
 -}
 type alias Config anonymousData user authenticatedData msg =
     { loginPath : String
+    , oneTimeLoginPath : String
     , logoutPath : Maybe String
     , userPath : String
     , decodeAccessToken : Decoder AccessToken
@@ -945,6 +951,7 @@ restful implementation.
 drupalConfig : AppConfig anonymousData user authenticatedData msg -> Config anonymousData user authenticatedData msg
 drupalConfig appConfig =
     { loginPath = "api/login-token"
+    , oneTimeLoginPath = "api/one-time-login"
     , logoutPath = Just "user/logout"
     , userPath = "api/me"
     , decodeAccessToken = field "access_token" JD.string
@@ -966,6 +973,7 @@ type Msg user
     | HandleLogoutAttempt (Result Error ())
     | TryLogout
     | TryAccessToken BackendUrl AccessToken
+    | TryOneTimeLogin BackendUrl (List ( String, String ))
     | TryPassword BackendUrl (List ( String, String )) String String
 
 
@@ -982,6 +990,17 @@ type Msg user
 tryLogin : BackendUrl -> List ( String, String ) -> String -> String -> Msg user
 tryLogin =
     TryPassword
+
+
+{-| Message which will try logging in against the specified backendUrl
+
+  - The second parameter is a list of query params to add the URL. (Typically,
+    you will add the "user id", "timestamp" and the "hash".)
+
+-}
+tryOneTimeLogin : BackendUrl -> List ( String, String ) -> Msg user
+tryOneTimeLogin =
+    TryOneTimeLogin
 
 
 {-| Record a successful login which you've performed independently.
@@ -1042,6 +1061,7 @@ classifyHttpError retry method error =
         Http.BadStatus response ->
             if response.status.code == 401 then
                 Rejected method
+
             else
                 HttpError method error Nothing
 
@@ -1145,6 +1165,25 @@ update config msg model =
             , Nothing
             )
 
+        TryOneTimeLogin backendUrl params ->
+            let
+                requestAccessToken =
+                    HttpBuilder.get (backendUrl </> config.oneTimeLoginPath)
+                        |> withQueryParams params
+                        |> withExpect (expectJson config.decodeAccessToken)
+                        |> HttpBuilder.toTask
+
+                cmd =
+                    requestAccessToken
+                        |> Task.andThen (requestUser config backendUrl)
+                        |> Task.attempt (HandleLoginAttempt (Just msg) ByOneTimeLogin)
+                        |> Cmd.map config.tag
+            in
+            ( setLoginProgress (Just (Checking ByOneTimeLogin)) model
+            , cmd
+            , Nothing
+            )
+
         TryLogout ->
             case model of
                 Anonymous _ ->
@@ -1198,6 +1237,7 @@ update config msg model =
                                 Err (BadStatus response) ->
                                     if response.status.code == 403 then
                                         Ok ()
+
                                     else
                                         result
 
